@@ -1,0 +1,39 @@
+image:
+  file: .gitpod.Dockerfile
+
+# List the start up tasks. Learn more: https://www.gitpod.io/docs/configure/workspaces/tasks
+tasks:
+  - name: Prepare
+    init: |
+      mkdir -p /workspace/dolibarr/public
+      mkdir -p /workspace/dolibarr/htdocs/conf
+      cd /workspace/dolibarr/htdocs
+      echo '<?php' >| ./_info_.php
+      echo 'phpinfo();' >> ./_info_.php
+      cd /workspace/dolibarr/htdocs/conf
+      touch ./conf.php
+      chmod 0744 ./conf.php
+  - name: start Servers
+    command: |
+      apachectl start
+      gp ports await 8001
+      echo "$(gp url 8001)"
+      gp preview $(gp url 8001)
+    env:
+      APACHE_DOCROOT_IN_REPO: htdocs
+      # NGINX_DOCROOT_IN_REPO: htdocs
+      # GITPOD_REPO_ROOT: /workspace/dolibarr
+      # GITPOD_REPO_ROOTS: /workspace/dolibarr
+
+# List the ports to expose. Learn more: https://www.gitpod.io/docs/configure/workspaces/ports
+ports:
+  - name: Frontend
+    description: Port 8001 for the frontend
+    port: 8001
+    onOpen: open-preview
+  - name: MySQL
+    description: Port 3306 for MySQL8
+    port: 3306
+    onOpen: ignore
+
+# Learn more from ready-to-use templates: https://www.gitpod.io/docs/introduction/getting-started/quickstart
