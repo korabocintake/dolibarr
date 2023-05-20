@@ -107,6 +107,9 @@ print load_fiche_titre($langs->trans("SvelteClientIfArea"), '', 'svelteclientif.
 
 print '<div class="fichecenter"><div class="fichethirdleft">';
 
+print '<hr>';
+print '<h1>svelte client</h1>';
+print '<script src="embed-svelte/dist.js"></script>';
 
 /* BEGIN MODULEBUILDER DRAFT MYOBJECT
 // Draft MyObject
