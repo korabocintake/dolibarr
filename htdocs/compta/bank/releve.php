@@ -65,15 +65,6 @@ $backtopage = GETPOST('backtopage', 'alpha');
 // Initialize technical object to manage hooks of page. Note that conf->hooks_modules contains array of hook context
 $hookmanager->initHooks(array('bankaccountstatement', 'globalcard'));
 
-// Security check
-$fieldid = (!empty($ref) ? $ref : $id);
-$fieldname = (!empty($ref) ? 'ref' : 'rowid');
-if ($user->socid) {
-	$socid = $user->socid;
-}
-
-$result = restrictedArea($user, 'banque', $fieldid, 'bank_account', '', '', $fieldname);
-
 if ($user->rights->banque->consolidate && $action == 'dvnext' && !empty($dvid)) {
 	$al = new AccountLine($db);
 	$al->datev_next($dvid);
@@ -109,12 +100,23 @@ if (!$sortfield) {
 $object = new Account($db);
 if ($id > 0 || !empty($ref)) {
 	$result = $object->fetch($id, $ref);
-	$account = $object->id; // Force the search field on id of account
+	// if fetch from ref, $id may be empty
+	$id = $object->id; // Force the search field on id of account
 }
 
 
 // Initialize technical object to manage context to save list fields
 $contextpage = 'banktransactionlist'.(empty($object->ref) ? '' : '-'.$object->id);
+
+
+// Security check
+$fieldid = (!empty($ref) ? $ref : $id);
+$fieldname = (!empty($ref) ? 'ref' : 'rowid');
+if ($user->socid) {
+	$socid = $user->socid;
+}
+
+$result = restrictedArea($user, 'banque', $fieldid, 'bank_account', '', '', $fieldname);
 
 
 // Define number of receipt to show (current, previous or next one ?)
@@ -125,6 +127,7 @@ if ($rel == 'prev') {
 	$sql .= " FROM ".MAIN_DB_PREFIX."bank as b";
 	$sql .= " WHERE b.num_releve < '".$db->escape($numref)."'";
 	$sql .= " AND b.fk_account = ".((int) $object->id);
+	$sql .= " AND d.entity IN (".getEntity($object->element).")";
 	$sql .= " ORDER BY b.num_releve DESC";
 
 	dol_syslog("htdocs/compta/bank/releve.php", LOG_DEBUG);
@@ -143,6 +146,7 @@ if ($rel == 'prev') {
 	$sql .= " FROM ".MAIN_DB_PREFIX."bank as b";
 	$sql .= " WHERE b.num_releve > '".$db->escape($numref)."'";
 	$sql .= " AND b.fk_account = ".((int) $object->id);
+	$sql .= " AND d.entity IN (".getEntity($object->element).")";
 	$sql .= " ORDER BY b.num_releve ASC";
 
 	dol_syslog("htdocs/compta/bank/releve.php", LOG_DEBUG);
@@ -169,12 +173,13 @@ $sql .= " ba.rowid as bankid, ba.ref as bankref, ba.label as banklabel";
 $sql .= " FROM ".MAIN_DB_PREFIX."bank_account as ba";
 $sql .= ", ".MAIN_DB_PREFIX."bank as b";
 $sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'bordereau_cheque as bc ON bc.rowid=b.fk_bordereau';
-$sql .= " WHERE b.num_releve='".$db->escape($numref)."'";
+$sql .= " WHERE b.num_releve = '".$db->escape($numref)."'";
 if (empty($numref)) {
 	$sql .= " OR b.num_releve is null";
 }
 $sql .= " AND b.fk_account = ".((int) $object->id);
 $sql .= " AND b.fk_account = ba.rowid";
+$sql .= " AND d.entity IN (".getEntity($object->element).")";
 $sql .= $db->order("b.datev, b.datec", "ASC"); // We add date of creation to have correct order when everything is done the same day
 
 $sqlrequestforbankline = $sql;
@@ -189,6 +194,7 @@ if ($action == 'confirm_editbankreceipt' && !empty($oldbankreceipt) && !empty($n
 	// TODO Add a test to check newbankreceipt does not exists yet
 	$sqlupdate = "UPDATE ".MAIN_DB_PREFIX."bank SET num_releve = '".$db->escape($newbankreceipt)."'";
 	$sqlupdate .= " WHERE num_releve = '".$db->escape($oldbankreceipt)."' AND fk_account = ".((int) $id);
+	$sqlupdate .= " AND entity IN (".getEntity($object->element).")";
 	$result = $db->query($sqlupdate);
 	if ($result < 0) {
 		dol_print_error($db);
@@ -251,7 +257,7 @@ if (empty($numref)) {
 
 	// Count total nb of records
 	$totalnboflines = 0;
-	if (empty($conf->global->MAIN_DISABLE_FULL_SCANLIST)) {
+	if (!getDolGlobalInt('MAIN_DISABLE_FULL_SCANLIST')) {
 		$result = $db->query($sql);
 		$totalnboflines = $db->num_rows($result);
 	}
