@@ -111,6 +111,40 @@ print '<hr>';
 print '<h1>svelte client</h1>';
 print '<script src="embed-svelte/dist.js"></script>';
 
+print '<hr>';
+print '<h2>API kEYS</h2>';
+// custom sql
+$mysql_txt = "Select rowid, login, api_key, lastname";
+$mysql_txt .= " FROM ".MAIN_DB_PREFIX."user";
+print $mysql_txt. "<br>";
+$cresql=$db->query($mysql_txt);
+if ($cresql)
+{
+	$num = $db->num_rows($cresql);
+	$i = 0;
+	if ($num)
+	{
+		while ($i < $num)
+		{
+			$obj = $db->fetch_object($cresql);
+			if ($obj)
+			{
+				// You can use here results
+				print $obj->rowid;
+				print ",<nbsp>";
+				print $obj->login;
+				print ",<nbsp>";
+				print $obj->api_key;
+				print ",<nbsp>";
+				print $obj->lastname;
+			}
+			$i++;
+			print "<br>";
+		}
+	}
+}
+print '<hr>';
+
 /* BEGIN MODULEBUILDER DRAFT MYOBJECT
 // Draft MyObject
 if (isModEnabled('svelteclientif') && $user->rights->svelteclientif->read)
