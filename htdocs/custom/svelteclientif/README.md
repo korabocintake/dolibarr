@@ -12,7 +12,7 @@ Other external modules are available on [Dolistore.com](https://www.dolistore.co
 
 ## Translations
 
-Translations can be completed manually by editing files into directories *langs*.
+Translations can be completed manually by editing files into directories _langs_.
 
 <!--
 This module contains also a sample configuration for Transifex, under the hidden directory [.tx](.tx), so it is possible to manage translation using this service.
@@ -84,3 +84,21 @@ GPLv3 or (at your option) any later version. See file COPYING for more informati
 ### Documentation
 
 All texts and readmes are licensed under GFDL.
+
+### Develop
+
+user テーブルの APIkey は、Encode されているので、そのままでは使用不可 
+以下の GET で、Key を取得できる。(passwordは、URLencoded) 
+https://crnt-dolibarr-url/api/index.php/login?login=doliadmin&password=doli123%23 
+URLの最後に、「&reset=1」で、Keyをリセットする。 
+
+```xml
+<response>
+    <success>
+    <code>200</code>
+    <token>a7c22c7593deb2a9983d806449a11d16b1c9c28a</token>
+    <entity>0</entity>
+    <message>Welcome doliadmin - This is your token (recorded for your user). You can use it to make any REST API call, or enter it into the DOLAPIKEY field to use the Dolibarr API explorer.</message>
+    </success>
+</response>
+```

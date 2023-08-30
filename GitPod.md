@@ -1,12 +1,14 @@
 GitPod
 ==========
+https://gitpod.io/workspaces
 
-gp init => made .gitpod.yml and .gitpod.Dockerfile
+(gp init => made .gitpod.yml and .gitpod.Dockerfile)
+
 gp validate => validate above files and start docker compose
 
-mysql: auto started, localhost:3306 root / <no-psw>
 
 Dolibarr
 ----------
 
 doliadmin / doli123#
+mysql: auto started, localhost:3306 root / <no-psw>
