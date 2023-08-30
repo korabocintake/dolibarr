@@ -12,3 +12,5 @@ Dolibarr
 
 doliadmin / doli123#
 mysql: auto started, localhost:3306 root / <no-psw>
+   dolibarr : dolibarr / doli123
+   
