@@ -70,6 +70,8 @@ class Conf
 	public $theme; // Contains current theme ("eldy", "auguria", ...)
 	public $css; // Contains full path of css page ("/theme/eldy/style.css.php", ...)
 
+	public $email_from;
+
 	//! Used to store current menu handler
 	public $standard_menu;
 	// List of activated modules
@@ -138,6 +140,7 @@ class Conf
 	public $agenda;
 	public $commande;
 	public $propal;
+	public $order;
 	/**
 	 * @deprecated Use invoice
 	 */
@@ -284,7 +287,6 @@ class Conf
 		$this->commande = new stdClass();
 		$this->propal = new stdClass();
 		$this->facture = new stdClass();
-		$this->contrat = new stdClass();
 		$this->user	= new stdClass();
 		$this->adherent = new stdClass();
 		$this->bank = new stdClass();
@@ -374,11 +376,9 @@ class Conf
 									$newvalue = '/'.$modulename.'/core/'.$partname.'/';
 								} elseif (in_array($partname, array('models', 'theme'))) {
 									$newvalue = '/'.$modulename.'/';
-								} elseif (in_array($partname, array('sms'))) {
-									$newvalue = '/'.$modulename.'/';
 								} elseif ($value == 1) {
 									$newvalue = '/'.$modulename.'/core/modules/'.$partname.'/'; // ex: partname = societe
-								} else {
+								} else {	// $partname can be any other value like 'sms', ...
 									$newvalue = $value;
 								}
 

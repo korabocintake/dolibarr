@@ -659,9 +659,29 @@ abstract class CommonObject
 	 */
 	public $alreadypaid;
 
+	/**
+	 * @var array		Array with label of status
+	 */
 	public $labelStatus;
 
+	/**
+	 * @var array array of status string
+	 * @deprecated 	Use instead labelStatus
+	 */
+	public $statuts = array();
+
+	/**
+	 * @var array		Array with short label of status
+	 */
 	protected $labelStatusShort;
+
+	/**
+	 * @var array array of short status string
+	 * @deprecated 	Use instead labelStatusShort
+	 */
+	public $statuts_short = array();
+
+
 
 	/**
 	 * @var int 		show photo on popup
@@ -672,6 +692,7 @@ abstract class CommonObject
 	 * @var array 		nb used in load_stateboard
 	 */
 	public $nb = array();
+
 
 	/**
 	 * @var string output
@@ -3715,18 +3736,21 @@ abstract class CommonObject
 			$this->multicurrency_total_ttc += isset($this->revenuestamp) ? ($this->revenuestamp * $multicurrency_tx) : 0;
 
 			// Situations totals
-			if (!empty($this->situation_cycle_ref) && $this->situation_counter > 1 && method_exists($this, 'get_prev_sits') && $this->type != $this::TYPE_CREDIT_NOTE) {
-				$prev_sits = $this->get_prev_sits();
+			if (!empty($this->situation_cycle_ref) && !empty($this->situation_counter) && $this->situation_counter > 1 && method_exists($this, 'get_prev_sits')) {
+				include_once DOL_DOCUMENT_ROOT.'/compta/facture/class/facture.class.php';
+				if ($this->type != Facture::TYPE_CREDIT_NOTE) {
+					$prev_sits = $this->get_prev_sits();
 
-				foreach ($prev_sits as $sit) {				// $sit is an object Facture loaded with a fetch.
-					$this->total_ht -= $sit->total_ht;
-					$this->total_tva -= $sit->total_tva;
-					$this->total_localtax1 -= $sit->total_localtax1;
-					$this->total_localtax2 -= $sit->total_localtax2;
-					$this->total_ttc -= $sit->total_ttc;
-					$this->multicurrency_total_ht -= $sit->multicurrency_total_ht;
-					$this->multicurrency_total_tva -= $sit->multicurrency_total_tva;
-					$this->multicurrency_total_ttc -= $sit->multicurrency_total_ttc;
+					foreach ($prev_sits as $sit) {				// $sit is an object Facture loaded with a fetch.
+						$this->total_ht -= $sit->total_ht;
+						$this->total_tva -= $sit->total_tva;
+						$this->total_localtax1 -= $sit->total_localtax1;
+						$this->total_localtax2 -= $sit->total_localtax2;
+						$this->total_ttc -= $sit->total_ttc;
+						$this->multicurrency_total_ht -= $sit->multicurrency_total_ht;
+						$this->multicurrency_total_tva -= $sit->multicurrency_total_tva;
+						$this->multicurrency_total_ttc -= $sit->multicurrency_total_ttc;
+					}
 				}
 			}
 
@@ -4291,6 +4315,9 @@ abstract class CommonObject
 		if (empty($fk_object_where) || empty($field_where) || empty($table_element)) {
 			return -1;
 		}
+		if (!preg_match('/^[_a-zA-Z0-9]+$/', $field_select)) {
+			dol_syslog('Invalid value $field_select for parameter '.$field_select.' in call to getAllItemsLinkedByObjectID(). Must be a single field name.', LOG_ERR);
+		}
 
 		global $db;
 
@@ -4305,6 +4332,35 @@ abstract class CommonObject
 		}
 
 		return $TRes;
+	}
+
+	/**
+	 * Count items linked to an object id in association table
+	 *
+	 * @param	int		$fk_object_where		id of object we need to get linked items
+	 * @param	string	$field_where			name of field of object we need to get linked items
+	 * @param	string	$table_element			name of association table
+	 * @return 	array|int						Array of record, -1 if empty
+	 */
+	public static function getCountOfItemsLinkedByObjectID($fk_object_where, $field_where, $table_element)
+	{
+		if (empty($fk_object_where) || empty($field_where) || empty($table_element)) {
+			return -1;
+		}
+
+		global $db;
+
+		$sql = "SELECT COUNT(*) as nb FROM ".$db->prefix().$table_element." WHERE ".$field_where." = ".((int) $fk_object_where);
+		$resql = $db->query($sql);
+		$n = 0;
+		if ($resql) {
+			$res = $db->fetch_object($resql);
+			if ($res) {
+				$n = $res->nb;
+			}
+		}
+
+		return $n;
 	}
 
 	/**
