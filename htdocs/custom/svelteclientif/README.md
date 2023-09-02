@@ -87,10 +87,56 @@ All texts and readmes are licensed under GFDL.
 
 ### Develop
 
+#### Global
+
+Login_ID: $user->login
+
+```php
+// ユーザコードにて、
+require '../main.inc.php';
+
+//  main.inc.php にて、
+// Init the 6 global objects, this include will make the 'new Xxx()' and set properties for: $conf, $db, $langs, $user, $mysoc, $hookmanager
+require_once 'master.inc.php';
+```
+
+#### Api Key
+
 user テーブルの APIkey は、Encode されているので、そのままでは使用不可 
+Emptyの状態からで失敗する場合は、以下のように入れるといいらしい。
+
+```sql
+update xxxxllx_user 
+  set api_key = '$(head /dev/urandom | tr -dc A-Za-z0-9 | head -c 32)'
+  where login = 'admin';
+```
+
+##### POST:
+
+```
+curl -X POST --header 'Content-Type: application/json' --header 'Accept: application/json' \
+  -d '{"login": "admin", "password": "xxxxx"}' 'https://oc2118.ourcompose.com/dolibarr/api/index.php/login'
+# data jsonの最後に、「"reset": 1」で、Keyをリセット 
+```
+
+```json
+{
+    "success": {
+        "code": 200,
+        "token": "4d4a609ab2f478072f53476a89cab101c94f0cc0",
+        "entity": "0",
+        "message": "Welcome admin - This is your token (recorded for your user). You can use it to make any REST API call, or enter it into the DOLAPIKEY field to use the Dolibarr API explorer."
+    }
+}
+```
+
+##### GET:
 以下の GET で、Key を取得できる。(passwordは、URLencoded) 
+
+```
 https://crnt-dolibarr-url/api/index.php/login?login=doliadmin&password=doli123%23 
-URLの最後に、「&reset=1」で、Keyをリセットする。 
+# URLの最後に、「&reset=1」で、Keyをリセット
+```
 
 ```xml
 <response>

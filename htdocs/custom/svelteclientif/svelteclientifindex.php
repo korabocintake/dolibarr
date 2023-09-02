@@ -112,6 +112,7 @@ print '<h1>svelte client</h1>';
 print '<script src="embed-svelte/dist.js"></script>';
 
 print '<hr>';
+print '<h2>User ID'.$user->login.'</h2>';
 print '<h2>API kEYS</h2>';
 // custom sql
 $mysql_txt = "Select rowid, login, api_key, lastname";
