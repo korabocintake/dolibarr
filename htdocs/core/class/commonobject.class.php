@@ -6280,17 +6280,8 @@ abstract class CommonObject
 
 				// Similar code than into insertExtraFields
 				if ($attributeRequired) {
-					$mandatorypb = false;
-					if ($attributeType == 'link' && $this->array_options[$key] == '-1') {
-						$mandatorypb = true;
-					}
-					if ($this->array_options[$key] === '') {
-						$mandatorypb = true;
-					}
-					if ($attributeType == 'sellist' && $this->array_options[$key] == '0') {
-						$mandatorypb = true;
-					}
-					if ($mandatorypb) {
+					$v = $this->array_options[$key];
+					if (ExtraFields::isEmptyValue($v, $attributeType)) {
 						$langs->load("errors");
 						dol_syslog("Mandatory field '".$key."' is empty during create and set to required into definition of extrafields");
 						$this->errors[] = $langs->trans('ErrorFieldRequired', $attributeLabel);
@@ -7525,13 +7516,13 @@ abstract class CommonObject
 	 * Return HTML string to show a field into a page
 	 * Code very similar with showOutputField of extra fields
 	 *
-	 * @param  array   $val		       Array of properties of field to show
-	 * @param  string  $key            Key of attribute
-	 * @param  string  $value          Preselected value to show (for date type it must be in timestamp format, for amount or price it must be a php numeric value)
-	 * @param  string  $moreparam      To add more parametes on html input tag
-	 * @param  string  $keysuffix      Prefix string to add into name and id of field (can be used to avoid duplicate names)
-	 * @param  string  $keyprefix      Suffix string to add into name and id of field (can be used to avoid duplicate names)
-	 * @param  mixed   $morecss        Value for css to define size. May also be a numeric.
+	 * @param  array   	$val		       	Array of properties of field to show
+	 * @param  string  	$key            	Key of attribute
+	 * @param  string  	$value          	Preselected value to show (for date type it must be in timestamp format, for amount or price it must be a php numeric value)
+	 * @param  string  	$moreparam      	To add more parameters on html tag
+	 * @param  string  	$keysuffix      	Prefix string to add into name and id of field (can be used to avoid duplicate names)
+	 * @param  string  	$keyprefix      	Suffix string to add into name and id of field (can be used to avoid duplicate names)
+	 * @param  mixed   	$morecss        	Value for CSS to use (Old usage: May also be a numeric to define a size).
 	 * @return string
 	 */
 	public function showOutputField($val, $key, $value, $moreparam = '', $keysuffix = '', $keyprefix = '', $morecss = '')

@@ -150,12 +150,17 @@ abstract class CommonDocGenerator
 	 */
 	public $result;
 
+	public $posxlabel;
+	public $posxup;
 	public $posxref;
 	public $posxpicture;	// For picture
 	public $posxdesc;		// For description
 	public $posxqty;
 	public $posxpuht;
-
+	public $posxtva;
+	public $atleastonephoto;
+	public $atleastoneratenotnull;
+	public $atleastonediscount;
 
 	/**
 	 *	Constructor
