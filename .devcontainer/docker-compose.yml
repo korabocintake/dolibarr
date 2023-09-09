@@ -19,18 +19,66 @@ services:
     # (Adding the "ports" property to this file will not forward from a Codespace.)
 
   db:
-    image: mariadb:10.4
+    image: mysql:8.0.31
+    hostname: "mysql8-server"
     restart: unless-stopped
     volumes:
-      - mariadb-data:/var/lib/mysql
+      - mysql-data:/var/lib/mysql
     environment:
       MYSQL_ROOT_PASSWORD: mariadb
       MYSQL_DATABASE: mariadb
       MYSQL_USER: mariadb
       MYSQL_PASSWORD: mariadb
-
+    stop_grace_period: 1m
     # Add "forwardPorts": ["3306"] to **devcontainer.json** to forward MariaDB locally.
     # (Adding the "ports" property to this file will not forward from a Codespace.)
-  
+    command:
+      - "--skip_name_resolve"
+      # utf8mb4 collation
+      - "--collation-server=utf8mb4_unicode_ci"
+      # - "--collation-server=utf8mb4_bin"
+      - "--skip-character-set-client-handshake"
+      # SP作成を許可
+      - "--log-bin-trust-function-creators=1"
+      # table名を小文字に
+      - "--lower_case_table_names=1"
+      # 5.6 "                                                                                                                   NO_ENGINE_SUBSTITUTION"
+      # 5.7 "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION"
+      # 8.x "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,                    NO_ENGINE_SUBSTITUTION"
+      # 8.3xでのゆるゆる設定： STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION
+      # TLS
+      # - --require-secure-transport
+      # - --ssl-ca=/run/secrets/root-ca.pem
+      # - --ssl-cert=/run/secrets/server-cert.pem
+      # - --ssl-key=/run/secrets/server-key.pem
+      # ## replication: Source
+      # - --gtid_mode=ON
+      # - --enforce_gtid_consistency=ON
+      # - --relay-log=relay-bin
+      # - --server_id=1
+      ## binary log
+      - --log-bin=mysql-bin
+      - --sync_binlog=1
+      - --binlog_expire_logs_seconds=864000
+      - --binlog_checksum=NONE
+      # logs and slow query
+      - --log-error=/var/log/mysql/mysqld.log
+      - --slow_query_log=1
+      - --slow_query_log_file=/var/log/mysql/slow.log
+      - --long_query_time=5
+      # innodb_flush_log_at_trx_commit=2
+      # log_timestamps=SYSTEM
+      # memory(全テーブルのサイズが望ましい)
+      # innodb_buffer_pool_size=2048M
+      # connextion
+      # MySQLがクライアントからの接続パケットを待機する時間（秒）
+      - --connect_timeout=10
+      # アプリケーションなどから接続された非対話型の接続に対してのアイドルタイムアウト時間（秒）
+      - --wait_timeout=300
+      # mysqlクライアントでログインした時などの対話型の接続に対してのアイドルタイムアウト時間（秒）
+      - --interactive_timeout=28800
+      # MySQLの同時接続数
+      - --max_connections=2000
+
 volumes:
-  mariadb-data:
+  mysql-data:

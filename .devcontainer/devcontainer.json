@@ -15,11 +15,16 @@
 		3306
 	],
 	"features": {
-		"ghcr.io/devcontainers/features/php:1": {}
+		"ghcr.io/devcontainers/features/php:1": {},
+		"ghcr.io/devcontainers/features/node:1": {
+			"nodeGypDependencies": true,
+			"version": "lts"
+		}
 	}
 
 	// Use 'postCreateCommand' to run commands after the container is created.
-	// "postCreateCommand": "sudo chmod a+x \"$(pwd)\" && sudo rm -rf /var/www/html && sudo ln -s \"$(pwd)\" /var/www/html"
+	,
+	"postCreateCommand": "sudo chmod -R a+x \"$(pwd)/htdocs\" && sudo rm -rf /var/www/html && sudo ln -s \"$(pwd)/htdocs\" /var/www/html"
 
 	// Configure tool-specific properties.
 	// "customizations": {},
