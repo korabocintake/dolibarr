@@ -123,12 +123,18 @@ if (!function_exists('str_contains')) {
 function getMultidirOutput($object, $module = '')
 {
 	global $conf;
+
 	if (!is_object($object) && empty($module)) {
 		return null;
 	}
 	if (empty($module) && !empty($object->element)) {
 		$module = $object->element;
 	}
+	// Special case for backward compatibility
+	if ($module == 'fichinter') {
+		$module = 'ficheinter';
+	}
+
 	return $conf->$module->multidir_output[(!empty($object->entity) ? $object->entity : $conf->entity)];
 }
 
@@ -490,14 +496,14 @@ function getBrowserInfo($user_agent)
  */
 function dol_shutdown()
 {
-	global $user, $langs, $db;
+	global $db;
 	$disconnectdone = false;
 	$depth = 0;
 	if (is_object($db) && !empty($db->connected)) {
 		$depth = $db->transaction_opened;
 		$disconnectdone = $db->close();
 	}
-	dol_syslog("--- End access to ".$_SERVER["PHP_SELF"].(($disconnectdone && $depth) ? ' (Warn: db disconnection forced, transaction depth was '.$depth.')' : ''), (($disconnectdone && $depth) ? LOG_WARNING : LOG_INFO));
+	dol_syslog("--- End access to ".(empty($_SERVER["PHP_SELF"]) ? 'unknown' : $_SERVER["PHP_SELF"]).(($disconnectdone && $depth) ? ' (Warn: db disconnection forced, transaction depth was '.$depth.')' : ''), (($disconnectdone && $depth) ? LOG_WARNING : LOG_INFO));
 }
 
 /**
@@ -635,7 +641,7 @@ function GETPOST($paramname, $check = 'alphanohtml', $method = 0, $filter = null
 	}
 
 	if (empty($method) || $method == 3 || $method == 4) {
-		$relativepathstring = $_SERVER["PHP_SELF"];
+		$relativepathstring = (empty($_SERVER["PHP_SELF"]) ? '' : $_SERVER["PHP_SELF"]);
 		// Clean $relativepathstring
 		if (constant('DOL_URL_ROOT')) {
 			$relativepathstring = preg_replace('/^'.preg_quote(constant('DOL_URL_ROOT'), '/').'/', '', $relativepathstring);
@@ -2795,11 +2801,11 @@ function dol_print_date($time, $format = '', $tzoutput = 'auto', $outputlangs = 
 	// Analyze date
 	$reg = array();
 	if (preg_match('/^([0-9][0-9][0-9][0-9])([0-9][0-9])([0-9][0-9])([0-9][0-9])([0-9][0-9])([0-9][0-9])$/i', $time, $reg)) {	// Deprecated. Ex: 1970-01-01, 1970-01-01 01:00:00, 19700101010000
-		dol_print_error('', "Functions.lib::dol_print_date function called with a bad value from page ".$_SERVER["PHP_SELF"]);
+		dol_print_error('', "Functions.lib::dol_print_date function called with a bad value from page ".(empty($_SERVER["PHP_SELF"]) ? 'unknown' : $_SERVER["PHP_SELF"]));
 		return '';
 	} elseif (preg_match('/^([0-9]+)\-([0-9]+)\-([0-9]+) ?([0-9]+)?:?([0-9]+)?:?([0-9]+)?/i', $time, $reg)) {    // Still available to solve problems in extrafields of type date
 		// This part of code should not be used anymore.
-		dol_syslog("Functions.lib::dol_print_date function called with a bad value from page ".$_SERVER["PHP_SELF"], LOG_WARNING);
+		dol_syslog("Functions.lib::dol_print_date function called with a bad value from page ".(empty($_SERVER["PHP_SELF"]) ? 'unknown' : $_SERVER["PHP_SELF"]), LOG_WARNING);
 		//if (function_exists('debug_print_backtrace')) debug_print_backtrace();
 		// Date has format 'YYYY-MM-DD' or 'YYYY-MM-DD HH:MM:SS'
 		$syear	= (!empty($reg[1]) ? $reg[1] : '');
@@ -4364,7 +4370,7 @@ function img_picto($titlealt, $picto, $moreatt = '', $pictoisfullpath = false, $
 				'propal'=>'infobox-propal', 'proposal'=>'infobox-propal','private'=>'infobox-project',
 				'reception'=>'flip', 'recruitmentjobposition'=>'infobox-adherent', 'recruitmentcandidature'=>'infobox-adherent',
 				'resource'=>'infobox-action',
-				'salary'=>'infobox-bank_account', 'shipment'=>'infobox-commande', 'supplier_invoice'=>'infobox-order_supplier', 'supplier_invoicea'=>'infobox-order_supplier', 'supplier_invoiced'=>'infobox-order_supplier',
+				'salary'=>'infobox-bank_account', 'shapes'=>'infobox-adherent', 'shipment'=>'infobox-commande', 'supplier_invoice'=>'infobox-order_supplier', 'supplier_invoicea'=>'infobox-order_supplier', 'supplier_invoiced'=>'infobox-order_supplier',
 				'supplier'=>'infobox-order_supplier', 'supplier_order'=>'infobox-order_supplier', 'supplier_proposal'=>'infobox-supplier_proposal',
 				'ticket'=>'infobox-contrat', 'title_accountancy'=>'infobox-bank_account', 'title_hrm'=>'infobox-holiday', 'expensereport'=>'infobox-expensereport', 'trip'=>'infobox-expensereport', 'title_agenda'=>'infobox-action',
 				'vat'=>'infobox-bank_account',
@@ -6939,7 +6945,7 @@ function get_exdir($num, $level, $alpha, $withoutslash, $object, $modulepart = '
  *	Creation of a directory (this can create recursive subdir)
  *
  *	@param	string		$dir		Directory to create (Separator must be '/'. Example: '/mydir/mysubdir')
- *	@param	string		$dataroot	Data root directory (To avoid having the data root in the loop. Using this will also lost the warning on first dir PHP has no permission when open_basedir is used)
+ *	@param	string		$dataroot	Data root directory (To avoid having the data root in the loop. Using this will also lost the warning, on first dir, saying PHP has no permission when open_basedir is used)
  *  @param	string		$newmask	Mask for new file (Defaults to $conf->global->MAIN_UMASK or 0755 if unavailable). Example: '0444'
  *	@return int         			< 0 if KO, 0 = already exists, > 0 if OK
  */
@@ -6972,6 +6978,7 @@ function dol_mkdir($dir, $dataroot = '', $newmask = '')
 		} else {
 			$ccdir .= $cdir[$i];
 		}
+		$regs = array();
 		if (preg_match("/^.:$/", $ccdir, $regs)) {
 			continue; // Si chemin Windows incomplet, on poursuit par rep suivant
 		}
@@ -9240,9 +9247,12 @@ function dol_eval($s, $returnvalue = 0, $hideerrors = 1, $onlysimplestring = '1'
 					return '';
 				}
 			}
-			$scheck = preg_replace('/->[a-zA-Z0-9_]+\(/', '->__METHOD__', $s);
-			$scheck = preg_replace('/\s[a-zA-Z0-9_]+\(/', ' __FUNCTION__', $scheck);
-			$scheck = preg_replace('/(\^|\')\(/', '__REGEXSTART__', $scheck);		// To allow preg_match('/^(aaa|bbb)/'...  or  isStringVarMatching('leftmenu', '(aaa|bbb)')
+			$scheck = preg_replace('/->[a-zA-Z0-9_]+\(/', '->__METHOD__', $s);	// accept parenthesis in '...->method(...'
+			$scheck = preg_replace('/^\(/', '__PARENTHESIS__', $scheck);	// accept parenthesis in '(...'
+			$scheck = preg_replace('/\s\(/', '__PARENTHESIS__', $scheck);	// accept parenthesis in '... ('
+			$scheck = preg_replace('/^[a-zA-Z0-9_]+\(/', '$1__FUNCTION__', $scheck); // accept parenthesis in 'function('
+			$scheck = preg_replace('/\s[a-zA-Z0-9_]+\(/', '$1__FUNCTION__', $scheck); // accept parenthesis in '... function('
+			$scheck = preg_replace('/(\^|\')\(/', '__REGEXSTART__', $scheck);	// To allow preg_match('/^(aaa|bbb)/'...  or  isStringVarMatching('leftmenu', '(aaa|bbb)')
 			//print 'scheck='.$scheck." : ".strpos($scheck, '(')."\n";
 			if (strpos($scheck, '(') !== false) {
 				if ($returnvalue) {
@@ -9264,6 +9274,13 @@ function dol_eval($s, $returnvalue = 0, $hideerrors = 1, $onlysimplestring = '1'
 					return '';
 				}
 			}
+			$scheck = preg_replace('/->[a-zA-Z0-9_]+\(/', '->__METHOD__', $s);	// accept parenthesis in '...->method(...'
+			$scheck = preg_replace('/^\(/', '__PARENTHESIS__', $scheck);	// accept parenthesis in '(...'
+			$scheck = preg_replace('/\s\(/', '__PARENTHESIS__', $scheck);	// accept parenthesis in '... ('
+			$scheck = preg_replace('/^[a-zA-Z0-9_]+\(/', '$1__FUNCTION__', $scheck); // accept parenthesis in 'function('
+			$scheck = preg_replace('/\s[a-zA-Z0-9_]+\(/', '$1__FUNCTION__', $scheck); // accept parenthesis in '... function('
+			$scheck = preg_replace('/(\^|\')\(/', '__REGEXSTART__', $scheck);		// To allow preg_match('/^(aaa|bbb)/'...  or  isStringVarMatching('leftmenu', '(aaa|bbb)')
+			//print 'scheck='.$scheck." : ".strpos($scheck, '(')."\n";
 			if (strpos($scheck, '(') !== false) {
 				if ($returnvalue) {
 					return 'Bad string syntax to evaluate (found call of a function or method without using direct name): '.$s;
@@ -9307,12 +9324,13 @@ function dol_eval($s, $returnvalue = 0, $hideerrors = 1, $onlysimplestring = '1'
 		$forbiddenphpstrings = array('$$');
 		$forbiddenphpstrings = array_merge($forbiddenphpstrings, array('_ENV', '_SESSION', '_COOKIE', '_GET', '_POST', '_REQUEST'));
 
-		$forbiddenphpfunctions = array("exec", "passthru", "shell_exec", "system", "proc_open", "popen", "eval");
+		$forbiddenphpfunctions = array("exec", "passthru", "shell_exec", "system", "proc_open", "popen");
 		$forbiddenphpfunctions = array_merge($forbiddenphpfunctions, array("dol_eval", "executeCLI", "verifCond"));	// native dolibarr functions
-		$forbiddenphpfunctions = array_merge($forbiddenphpfunctions, array("base64_decode", "rawurldecode", "urldecode"));	// decode string functions
+		$forbiddenphpfunctions = array_merge($forbiddenphpfunctions, array("base64_decode", "rawurldecode", "urldecode")); // decode string functions
 		$forbiddenphpfunctions = array_merge($forbiddenphpfunctions, array("fopen", "file_put_contents", "fputs", "fputscsv", "fwrite", "fpassthru", "require", "include", "mkdir", "rmdir", "symlink", "touch", "unlink", "umask"));
 		$forbiddenphpfunctions = array_merge($forbiddenphpfunctions, array("get_defined_functions", "get_defined_vars", "get_defined_constants", "get_declared_classes"));
 		$forbiddenphpfunctions = array_merge($forbiddenphpfunctions, array("function", "call_user_func"));
+		$forbiddenphpfunctions = array_merge($forbiddenphpfunctions, array("eval", "create_function", "assert", "mb_ereg_replace")); // function with eval capabilities
 
 		$forbiddenphpregex = 'global\s+\$|\b('.implode('|', $forbiddenphpfunctions).')\b';
 
@@ -9350,7 +9368,7 @@ function dol_eval($s, $returnvalue = 0, $hideerrors = 1, $onlysimplestring = '1'
 	} catch (Error $e) {
 		$error = 'dol_eval try/catch error : ';
 		$error .= $e->getMessage();
-		dol_syslog($error);
+		dol_syslog($error, LOG_WARNING);
 	}
 }
 
