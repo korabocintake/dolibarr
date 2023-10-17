@@ -223,11 +223,11 @@ class Mailing extends CommonObject
 		$this->statuts[2] = 'MailingStatusSentPartialy';
 		$this->statuts[3] = 'MailingStatusSentCompletely';
 
-		$this->statut_dest[-1] = 'MailingStatusError';
 		$this->statut_dest[0] = 'MailingStatusNotSent';
 		$this->statut_dest[1] = 'MailingStatusSent';
 		$this->statut_dest[2] = 'MailingStatusRead';
 		$this->statut_dest[3] = 'MailingStatusReadAndUnsubscribe'; // Read but ask to not be contacted anymore
+		$this->statut_dest[-1] = 'MailingStatusError';
 	}
 
 	/**
@@ -415,7 +415,6 @@ class Mailing extends CommonObject
 
 				$this->user_creat = $obj->fk_user_creat;
 				$this->user_creation = $obj->fk_user_creat;
-				$this->user_valid = $obj->fk_user_valid;
 				$this->user_validation = $obj->fk_user_valid;
 
 				$this->date_creat = $this->db->jdate($obj->date_creat);
@@ -479,8 +478,8 @@ class Mailing extends CommonObject
 			$object->email_replyto      = '';
 			$object->email_errorsto     = '';
 
-			$object->user_creat         = $user->id;
-			$object->user_valid         = '';
+			$object->user_creation_id = $user->id;
+			$object->user_validation_id = '';
 
 			$object->date_creat         = '';
 			$object->date_valid         = '';

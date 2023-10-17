@@ -309,6 +309,13 @@ class Inventory extends CommonObject
 				$sql .= " AND cp.fk_categorie IN (".$this->db->sanitize($this->categories_product).")";
 				$sql .= ")";
 			}
+			if (getDolGlobalInt('PRODUIT_SOUSPRODUITS')) {
+				$sql .= " AND NOT EXISTS (";
+				$sql .= " SELECT pa.rowid";
+				$sql .= " FROM ".$this->db->prefix()."product_association as pa";
+				$sql .= " WHERE pa.fk_product_pere = ps.fk_product";
+				$sql .= ")";
+			}
 
 			$inventoryline = new InventoryLine($this->db);
 
@@ -725,9 +732,7 @@ class Inventory extends CommonObject
 				}
 
 				if ($obj->fk_user_valid > 0) {
-					$vuser = new User($this->db);
-					$vuser->fetch($obj->fk_user_valid);
-					$this->user_validation = $vuser;
+					$this->user_validation_id = $obj->fk_user_valid;
 				}
 
 				$this->date_creation     = $this->db->jdate($obj->datec);

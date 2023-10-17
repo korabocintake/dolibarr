@@ -433,7 +433,7 @@ class ChargeSociales extends CommonObject
 
 	// phpcs:disable PEAR.NamingConventions.ValidFunctionName.ScopeNotCamelCaps
 	/**
-	 *    Tag social contribution as paid completely
+	 *  Tag social contribution as paid completely
 	 *
 	 *	@deprecated
 	 *  @see setPaid()
@@ -723,9 +723,7 @@ class ChargeSociales extends CommonObject
 				}
 
 				if ($obj->fk_user_valid) {
-					$vuser = new User($this->db);
-					$vuser->fetch($obj->fk_user_valid);
-					$this->user_validation = $vuser;
+					$this->user_validation_id = $obj->fk_user_valid;
 				}
 
 				$this->date_creation     = $this->db->jdate($obj->datec);
