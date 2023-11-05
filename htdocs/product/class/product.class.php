@@ -34,11 +34,12 @@
 /**
  *    \file       htdocs/product/class/product.class.php
  *    \ingroup    produit
- *    \brief      File of class to manage predefined products or services
+ *    \brief      File of class to manage the predefined products or services
  */
 require_once DOL_DOCUMENT_ROOT.'/core/lib/product.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/core/class/commonobject.class.php';
 require_once DOL_DOCUMENT_ROOT.'/product/class/productbatch.class.php';
+require_once DOL_DOCUMENT_ROOT.'/product/stock/class/productlot.class.php';
 require_once DOL_DOCUMENT_ROOT.'/product/stock/class/entrepot.class.php';
 
 /**
@@ -1168,6 +1169,19 @@ class Product extends CommonObject
 						if ($ObjBatch->create($user, 1) < 0) {
 							$error++;
 							$this->errors = $ObjBatch->errors;
+						} else {
+							// we also add lot record if not exist
+							$ObjLot = new Productlot($this->db);
+							if ($ObjLot->fetch(0, $this->id, $valueforundefinedlot) == 0) {
+								$ObjLot->fk_product = $this->id;
+								$ObjLot->entity = $this->entity;
+								$ObjLot->fk_user_creat = $user->id;
+								$ObjLot->batch = $valueforundefinedlot;
+								if ($ObjLot->create($user, true) < 0) {
+									$error++;
+									$this->errors = $ObjLot->errors;
+								}
+							}
 						}
 					}
 				}
@@ -1293,6 +1307,42 @@ class Product extends CommonObject
 					if (!$result) {
 						$error++;
 						$this->error = 'ErrorFailedToUpdateAccountancyForEntity';
+					}
+				}
+
+				if (!$this->hasbatch() && $this->oldcopy->hasbatch()) {
+					// Selection of all product stock mouvements that contains batchs
+					$sql = 'SELECT pb.qty, pb.fk_entrepot, pb.batch FROM '.MAIN_DB_PREFIX.'product_batch as pb';
+					$sql.= ' INNER JOIN '.MAIN_DB_PREFIX.'product_stock as ps ON (ps.rowid = batch.fk_product_stock)';
+					$sql.= ' WHERE ps.fk_product = '.(int) $this->id;
+
+					$resql = $this->db->query($sql);
+					if ($resql) {
+						$inventorycode = dol_print_date(dol_now(), '%Y%m%d%H%M%S');
+
+						while ($obj = $this->db->fetch_object($resql)) {
+							$value = $obj->qty;
+							$fk_entrepot = $obj->fk_entrepot;
+							$price = 0;
+							$dlc = '';
+							$dluo = '';
+							$batch = $obj->batch;
+
+							// To know how to revert stockMouvement (add or remove)
+							$addOremove = $value > 0 ? 1 : 0; // 1 if remove, 0 if add
+							$label = $langs->trans('BatchStockMouvementAddInGlobal');
+							$res = $this->correct_stock_batch($user, $fk_entrepot, abs($value), $addOremove, $label, $price, $dlc, $dluo, $batch, $inventorycode, '', null, 0, null, true);
+
+							if ($res > 0) {
+								$label = $langs->trans('BatchStockMouvementAddInGlobal');
+								$res = $this->correct_stock($user, $fk_entrepot, abs($value), (int) empty($addOremove), $label, $price, $inventorycode, '', null, 0);
+								if ($res < 0) {
+									$error++;
+								}
+							} else {
+								$error++;
+							}
+						}
 					}
 				}
 
@@ -2159,9 +2209,10 @@ class Product extends CommonObject
 	 * @param  int    $ignore_autogen    Used to avoid infinite loops
 	 * @param  array  $localtaxes_array  Array with localtaxes info array('0'=>type1,'1'=>rate1,'2'=>type2,'3'=>rate2) (loaded by getLocalTaxesFromRate(vatrate, 0, ...) function).
 	 * @param  string $newdefaultvatcode Default vat code
+	 * @param  int    $notrigger         Disable triggers
 	 * @return int                            <0 if KO, >0 if OK
 	 */
-	public function updatePrice($newprice, $newpricebase, $user, $newvat = '', $newminprice = 0, $level = 0, $newnpr = 0, $newpbq = 0, $ignore_autogen = 0, $localtaxes_array = array(), $newdefaultvatcode = '')
+	public function updatePrice($newprice, $newpricebase, $user, $newvat = '', $newminprice = 0, $level = 0, $newnpr = 0, $newpbq = 0, $ignore_autogen = 0, $localtaxes_array = array(), $newdefaultvatcode = '', $notrigger = 0)
 	{
 		global $conf, $langs;
 
@@ -2330,10 +2381,12 @@ class Product extends CommonObject
 				$this->level = $level; // Store level of price edited for trigger
 
 				// Call trigger
-				$result = $this->call_trigger('PRODUCT_PRICE_MODIFY', $user);
-				if ($result < 0) {
-					$this->db->rollback();
-					return -1;
+				if (!$notrigger) {
+					$result = $this->call_trigger('PRODUCT_PRICE_MODIFY', $user);
+					if ($result < 0) {
+						$this->db->rollback();
+						return -1;
+					}
 				}
 				// End call triggers
 
@@ -5041,7 +5094,8 @@ class Product extends CommonObject
 				//$prods[$this->db->escape($rec['label'])]= array(0=>$rec['id'],1=>$rec['qty'],2=>$rec['fk_product_type']);
 				//$prods[$this->db->escape($rec['label'])]= array(0=>$rec['id'],1=>$rec['qty']);
 				if (empty($firstlevelonly)) {
-					$listofchilds = $this->getChildsArbo($rec['rowid'], 0, $level + 1, array_push($parents, $rec['rowid']));
+					$parents[] = $rec['rowid'];
+					$listofchilds = $this->getChildsArbo($rec['rowid'], 0, $level + 1, $parents);
 					foreach ($listofchilds as $keyChild => $valueChild) {
 						$prods[$rec['rowid']]['childs'][$keyChild] = $valueChild;
 					}
@@ -5194,12 +5248,12 @@ class Product extends CommonObject
 	}
 
 	/**
-	 *    Return clicable link of object (with eventually picto)
+	 *    Return clickable link of object (with eventually picto)
 	 *
 	 * @param	int		$withpicto				Add picto into link
 	 * @param	string	$option					Where point the link ('stock', 'composition', 'category', 'supplier', '')
 	 * @param	int		$maxlength				Maxlength of ref
-	 * @param 	int		$save_lastsearch_value	-1=Auto, 0=No save of lastsearch_values when clicking, 1=Save lastsearch_values whenclicking
+	 * @param 	int		$save_lastsearch_value	-1=Auto, 0=No save of lastsearch_values when clicking, 1=Save lastsearch_values when clicking
 	 * @param	int		$notooltip				No tooltip
 	 * @param  	string  $morecss            	''=Add more css on link
 	 * @param	int		$add_label				0=Default, 1=Add label into string, >1=Add first chars into string
@@ -5219,7 +5273,7 @@ class Product extends CommonObject
 		}
 		$params = [
 			'id' => $this->id,
-			'objecttype' => $this->element,
+			'objecttype' => (isset($this->type) ? ($this->type == 1 ? 'service' : 'product') : $this->element),
 			'option' => $option,
 			'nofetch' => 1,
 		];
@@ -5535,9 +5589,10 @@ class Product extends CommonObject
 	 * @param  int      $origin_id      Origin id of element
 	 * @param  int	    $disablestockchangeforsubproduct	Disable stock change for sub-products of kit (usefull only if product is a subproduct)
 	 * @param  Extrafields $extrafields	Array of extrafields
+	 * @param  boolean  $force_update_batch   Force update batch
 	 * @return int                      <0 if KO, >0 if OK
 	 */
-	public function correct_stock_batch($user, $id_entrepot, $nbpiece, $movement, $label = '', $price = 0, $dlc = '', $dluo = '', $lot = '', $inventorycode = '', $origin_element = '', $origin_id = null, $disablestockchangeforsubproduct = 0, $extrafields = null)
+	public function correct_stock_batch($user, $id_entrepot, $nbpiece, $movement, $label = '', $price = 0, $dlc = '', $dluo = '', $lot = '', $inventorycode = '', $origin_element = '', $origin_id = null, $disablestockchangeforsubproduct = 0, $extrafields = null, $force_update_batch = false)
 	{
 		// phpcs:enable
 		if ($id_entrepot) {
@@ -5557,7 +5612,7 @@ class Product extends CommonObject
 
 			$movementstock = new MouvementStock($this->db);
 			$movementstock->setOrigin($origin_element, $origin_id); // Set ->origin_type and ->fk_origin
-			$result = $movementstock->_create($user, $this->id, $id_entrepot, $op[$movement], $movement, $price, $label, $inventorycode, '', $dlc, $dluo, $lot, false, 0, $disablestockchangeforsubproduct);
+			$result = $movementstock->_create($user, $this->id, $id_entrepot, $op[$movement], $movement, $price, $label, $inventorycode, '', $dlc, $dluo, $lot, false, 0, $disablestockchangeforsubproduct, 0, $force_update_batch);
 
 			if ($result >= 0) {
 				if ($extrafields) {
@@ -5774,6 +5829,8 @@ class Product extends CommonObject
 		$reshook = $hookmanager->executeHooks('loadvirtualstock', $parameters, $this, $action);
 		if ($reshook > 0) {
 			$this->stock_theorique = $hookmanager->resArray['stock_theorique'];
+		} elseif ($reshook == 0 && isset($hookmanager->resArray['stock_stats_hook'])) {
+			$this->stock_theorique += $hookmanager->resArray['stock_stats_hook'];
 		}
 
 		return 1;
@@ -6375,20 +6432,11 @@ class Product extends CommonObject
 				$obj = $this->db->fetch_object($result);
 
 				$this->id = $obj->rowid;
-
-				if ($obj->fk_user_author) {
-					$cuser = new User($this->db);
-					$cuser->fetch($obj->fk_user_author);
-					$this->user_creation = $cuser;
-				}
-
-				if ($obj->fk_user_modif) {
-					$muser = new User($this->db);
-					$muser->fetch($obj->fk_user_modif);
-					$this->user_modification = $muser;
-				}
-
 				$this->ref = $obj->ref;
+
+				$this->user_creation_id = $obj->fk_user_author;
+				$this->user_modification_id = $obj->fk_user_modif;
+
 				$this->date_creation     = $this->db->jdate($obj->date_creation);
 				$this->date_modification = $this->db->jdate($obj->date_modification);
 			}
