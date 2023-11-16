@@ -395,7 +395,7 @@ class Productbatch extends CommonObject
 			$sql .= " WHERE t.fk_product_stock = ".((int) $fk_product_stock);
 		} else {
 			$sql .= ", ".$this->db->prefix()."product_stock as ps";
-			$sql .= " WHERE t.fk_product_stock = ps.rowid AND ps.fk_warehouse = ".((int) $fk_warehouse);
+			$sql .= " WHERE t.fk_product_stock = ps.rowid AND ps.fk_entrepot = ".((int) $fk_warehouse);
 		}
 		if (!empty($eatby)) {
 			array_push($where, " eatby = '".$this->db->idate($eatby)."'"); // deprecated
@@ -493,6 +493,7 @@ class Productbatch extends CommonObject
 		if ($fk_product > 0) { $sql .= "pl.eatby ASC, pl.sellby ASC, "; }
 		$sql .= "t.eatby ASC, t.sellby ASC ";
 		$sql .= ", t.qty ".(empty($conf->global->DO_NOT_TRY_TO_DEFRAGMENT_STOCKS_WAREHOUSE)?'ASC':'DESC'); // Note : qty ASC is important for expedition card, to avoid stock fragmentation
+		$sql .= ", t.batch ASC";
 
 		dol_syslog("productbatch::findAll", LOG_DEBUG);
 

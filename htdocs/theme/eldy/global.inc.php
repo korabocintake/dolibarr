@@ -1068,6 +1068,7 @@ span.fa.fa-plus-circle.paddingleft {
 /* Themes for badges */
 
 <?php include dol_buildpath($path.'/theme/'.$theme.'/badges.inc.php', 0); ?>
+<?php include dol_buildpath($path.'/theme/'.$theme.'/flags-sprite.inc.php', 0); ?>
 
 .borderrightlight
 {
@@ -4111,10 +4112,6 @@ div.pagination li.litext a:hover {
 	background-color: transparent;
 	background-image: none;
 }
-div.pagination li.litext a:hover {
-	background-color: transparent;
-	background-image: none;
-}
 div.pagination li.noborder a:hover {
   border: none;
   background-color: transparent;
@@ -4999,8 +4996,8 @@ div.backgreypublicpayment {
 	border-bottom: 1px solid #ddd;
 	text-align: center;
 	position: sticky;
-    top: 0;
-    z-index: 1005;
+	top: 0;
+	z-index: 1005;
 }
 .backgreypublicpayment a { color: #222 !important; }
 .poweredbypublicpayment {

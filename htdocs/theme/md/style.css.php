@@ -1322,6 +1322,7 @@ span.fa.fa-plus-circle.paddingleft {
 
 /* Themes for badges */
 <?php include dol_buildpath($path.'/theme/'.$theme.'/badges.inc.php', 0); ?>
+<?php include dol_buildpath($path.'/theme/'.$theme.'/flags-sprite.inc.php', 0); ?>
 
 .borderrightlight
 {
@@ -5050,8 +5051,8 @@ div.backgreypublicpayment {
 	border-bottom: 1px solid #ddd;
 	text-align: center;
 	position: sticky;
-    top: 0;
-    z-index: 1005;
+	top: 0;
+	z-index: 1005;
 }
 .backgreypublicpayment a { color: #222 !important; }
 .poweredbypublicpayment {
@@ -7959,4 +7960,3 @@ if (is_object($db)) {
 div.flot-text .flot-tick-label .tickLabel, .fa-color-unset {
 	color: unset;
 }
-
