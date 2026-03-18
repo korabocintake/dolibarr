@@ -15,7 +15,10 @@ RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
 
 #     'icu-uc','icu-io','icu-i18n'  required by 'virtual:world', not found => install libicu-dev
 
-# nodejs is needed for Github Runner instance
+# go-task
+RUN curl -1sLf 'https://dl.cloudsmith.io/public/task/task/setup.deb.sh' | bash
+
+# nodejs is needed for additionla tools
 RUN apt-get update && export DEBIAN_FRONTEND=noninteractive \
     && apt-get -y install --no-install-recommends \
     task nodejs npm \
