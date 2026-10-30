@@ -25,7 +25,7 @@
  *		\remarks	To run this script as CLI:  phpunit filename.php
  */
 
-global $conf,$user,$langs,$db;
+global $conf,$user,$langs,$db,$mysoc;
 //define('TEST_DB_FORCE_TYPE','mysql');	// This is to force using mysql driver
 //require_once 'PHPUnit/Autoload.php';
 require_once dirname(__FILE__).'/CommonClassTest.class.php';
@@ -65,11 +65,11 @@ if (empty($user->id)) {
 	print "Load permissions for admin user nb 1\n";
 	$user->fetch(1);
 	$user->loadRights();
-
-	if (empty($user->rights->website)) {
-		$user->rights->website = new stdClass();
-	}
 }
+if (empty($user->rights->website)) {
+	$user->rights->website = new stdClass();
+}
+
 $conf->global->MAIN_DISABLE_ALL_MAILS = 1;
 
 
@@ -132,13 +132,52 @@ class WebsiteTest extends CommonClassTest
 	 */
 	public function testCheckPHPCode()
 	{
-		global $user;
+		global $conf, $user;
+
+		// Force allow of PHP in website from main setup
+		global $dolibarr_website_allow_custom_php;
+		$dolibarr_website_allow_custom_php = 2;		// Value 2 allow PHP code, so we can check the protections. Value 1 will allow PHP code only if exec fautres are disabled in PHP.
 
 		// Force permission so this is not the permission that will affect result of checkPHPCode
 		$user->rights->website->writephp = 1;
 
+		// Legitimate
+
+		$t = '';
+		$s = '<?php execu ?>';
+		$result = checkPHPCode($t, $s);
+		print __METHOD__." result checkPHPCode=".$result."\n";
+		$this->assertEquals($result, 0, 'checkPHPCode detect string as dangerous when it is legitimate');
+
+		$t = '';
+		$s = '<?php echo $_SESSION["eee"] ?>';
+		$result = checkPHPCode($t, $s);
+		print __METHOD__." result checkPHPCode=".$result."\n";
+		$this->assertEquals($result, 0, 'checkPHPCode detect string as dangerous when it is legitimate');
+
+
+		// Dangerous
+
 		$t = '';
 		$s = '<?php exec("eee"); ?>';
+		$result = checkPHPCode($t, $s);
+		print __METHOD__." result checkPHPCode=".$result."\n";
+		$this->assertEquals($result, 1, 'checkPHPCode did not detect the string was dangerous');
+
+		$t = '';
+		$s = '<?php eXec  ("eee"); ?>';
+		$result = checkPHPCode($t, $s);
+		print __METHOD__." result checkPHPCode=".$result."\n";
+		$this->assertEquals($result, 1, 'checkPHPCode did not detect the string was dangerous');
+
+		$t = '';
+		$s = '<?php $a="xec"; "e$a" ("ee"); ?>';
+		$result = checkPHPCode($t, $s);
+		print __METHOD__." result checkPHPCode=".$result."\n";
+		$this->assertEquals($result, 1, 'checkPHPCode did not detect the string was dangerous');
+
+		$t = '';
+		$s = '<?php $a=\'exec\'("ee"); ?>';
 		$result = checkPHPCode($t, $s);
 		print __METHOD__." result checkPHPCode=".$result."\n";
 		$this->assertEquals($result, 1, 'checkPHPCode did not detect the string was dangerous');
@@ -148,6 +187,28 @@ class WebsiteTest extends CommonClassTest
 		$result = checkPHPCode($t, $s);
 		print __METHOD__." result checkPHPCode=".$result."\n";
 		$this->assertEquals($result, 1, 'checkPHPCode did not detect the string was dangerous');
+
+		$t = '';
+		$s = '<?php $pid = pcntl_fork(); ?>';
+		$result = checkPHPCode($t, $s);
+		print __METHOD__." result checkPHPCode=".$result."\n";
+		$this->assertEquals($result, 1, 'checkPHPCode did not detect the string was dangerous');
+
+		$t = '';
+		$s = '<?php $pid = pcntl_fork(); if (!$pid) { pcntl_exec("/usr/bin/touch", array("/tmp/totouch")); } ?>';
+		$result = checkPHPCode($t, $s);
+		print __METHOD__." result checkPHPCode=".$result."\n";
+		$this->assertEquals($result, 1, 'checkPHPCode did not detect the string was dangerous');
+
+		// Dangerous but legitimate due to option WEBSITE_PHP_ALLOW_EXEC
+
+		$conf->global->WEBSITE_PHP_ALLOW_EXEC = 1;
+
+		$t = '';
+		$s = '<?php exec("eee"); ?>';
+		$result = checkPHPCode($t, $s);
+		print __METHOD__." result checkPHPCode=".$result."\n";
+		$this->assertEquals($result, 0, 'checkPHPCode did not accept the exec. it should when WEBSITE_PHP_ALLOW_EXEC is set.');
 	}
 
 	/**

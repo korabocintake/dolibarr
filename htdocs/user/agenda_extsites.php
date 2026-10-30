@@ -2,7 +2,7 @@
 /* Copyright (C) 2008-2016 Laurent Destailleur  <eldy@users.sourceforge.net>
  * Copyright (C) 2011-2014 Juanjo Menent        <jmenent@2byte.es>
  * Copyright (C) 2024		MDW						<mdeweerd@users.noreply.github.com>
- * Copyright (C) 2024       Frédéric France         <frederic.france@free.fr>
+ * Copyright (C) 2024-2025  Frédéric France         <frederic.france@free.fr>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -52,10 +52,7 @@ $actiontest = GETPOST('test', 'alpha');
 $actionsave = GETPOST('save', 'alpha');
 $contextpage = GETPOST('contextpage', 'aZ') ? GETPOST('contextpage', 'aZ') : 'useragenda'; // To manage different context of search
 
-if (!getDolGlobalString('AGENDA_EXT_NB')) {
-	$conf->global->AGENDA_EXT_NB = 5;
-}
-$MAXAGENDA = getDolGlobalString('AGENDA_EXT_NB');
+$MAXAGENDA = getDolGlobalString('AGENDA_EXT_NB', 6);
 
 // List of available colors
 $colorlist = array('BECEDD', 'DDBECE', 'BFDDBE', 'F598B4', 'F68654', 'CBF654', 'A4A4A5');
@@ -117,6 +114,7 @@ if (empty($reshook)) {
 				$color = '';
 			}
 			$enabled = trim(GETPOST('AGENDA_EXT_ENABLED_'.$id.'_'.$i, 'alpha'));
+			$cachedelay = (GETPOSTINT('AGENDA_EXT_CACHE_'.$id.'_'.$i) > 0 ? (string) GETPOSTINT('AGENDA_EXT_CACHE_'.$id.'_'.$i) : '');
 
 			if (!empty($src) && !dol_is_url($src)) {
 				setEventMessages($langs->trans("ErrorParamMustBeAnUrl"), null, 'errors');
@@ -130,6 +128,7 @@ if (empty($reshook)) {
 			$tabparam['AGENDA_EXT_OFFSETTZ_'.$id.'_'.$i] = $offsettz;
 			$tabparam['AGENDA_EXT_COLOR_'.$id.'_'.$i] = $color;
 			$tabparam['AGENDA_EXT_ENABLED_'.$id.'_'.$i] = $enabled;
+			$tabparam['AGENDA_EXT_CACHE_'.$id.'_'.$i] = $cachedelay;
 
 			$i++;
 		}
@@ -185,12 +184,12 @@ if ($user->hasRight('user', 'user', 'lire') || $user->admin) {
 	$linkback = '<a href="'.DOL_URL_ROOT.'/user/list.php?restore_lastsearch_values=1">'.$langs->trans("BackToList").'</a>';
 }
 
-$morehtmlref = '<a href="'.DOL_URL_ROOT.'/user/vcard.php?id='.$object->id.'&output=file&file='.urlencode(dol_sanitizeFileName($object->getFullName($langs).'.vcf')).'" class="refid" rel="noopener">';
-$morehtmlref .= img_picto($langs->trans("Download").' '.$langs->trans("VCard"), 'vcard.png', 'class="valignmiddle marginleftonly paddingrightonly"');
+$morehtmlref = '<a href="'.DOL_URL_ROOT.'/user/vcard.php?id='.$object->id.'&output=file&file='.urlencode(dol_sanitizeFileName($object->getFullName($langs).'.vcf')).'" class="refid valignmiddle" tabindex="-1" rel="noopener">';
+$morehtmlref .= img_picto($langs->trans("Download").' '.$langs->trans("VCard"), 'vcard', 'class="valignmiddle marginleftonly paddingrightonly"');
 $morehtmlref .= '</a>';
 
 $urltovirtualcard = '/user/virtualcard.php?id='.((int) $object->id);
-$morehtmlref .= dolButtonToOpenUrlInDialogPopup('publicvirtualcard', $langs->transnoentitiesnoconv("PublicVirtualCardUrl").' - '.$object->getFullName($langs), img_picto($langs->trans("PublicVirtualCardUrl"), 'card', 'class="valignmiddle marginleftonly paddingrightonly"'), $urltovirtualcard, '', 'nohover');
+$morehtmlref .= dolButtonToOpenUrlInDialogPopup('publicvirtualcard', $langs->transnoentitiesnoconv("PublicVirtualCardUrl").' - '.$object->getFullName($langs), img_picto($langs->trans("PublicVirtualCardUrl"), 'card', 'class="valignmiddle marginleftonly paddingrightonly"'), $urltovirtualcard, '', 'refid valignmiddle nohover');
 
 dol_banner_tab($object, 'id', $linkback, $user->hasRight('user', 'user', 'lire') || $user->admin, 'rowid', 'ref', $morehtmlref);
 
@@ -201,19 +200,17 @@ print '<table class="border tableforfield centpercent">';
 
 // Login
 print '<tr><td id="anchorforperms" class="titlefield">'.$langs->trans("Login").'</td>';
-if (!empty($object->ldap_sid) && $object->statut == 0) {
+if (!empty($object->ldap_sid) && $object->status == 0) {
 	print '<td class="error">';
 	print $langs->trans("LoginAccountDisableInDolibarr");
 	print '</td>';
 } else {
 	print '<td>';
 	$addadmin = '';
-	if (property_exists($object, 'admin')) {
-		if (isModEnabled('multicompany') && !empty($object->admin) && empty($object->entity)) {
-			$addadmin .= img_picto($langs->trans("SuperAdministratorDesc"), "redstar", 'class="paddingleft"');
-		} elseif (!empty($object->admin)) {
-			$addadmin .= img_picto($langs->trans("AdministratorDesc"), "star", 'class="paddingleft"');
-		}
+	if (isModEnabled('multicompany') && !empty($object->admin) && empty($object->entity)) {
+		$addadmin .= img_picto($langs->trans("SuperAdministratorDesc"), "superadmin", 'class="paddingleft valignmiddle"');
+	} elseif (!empty($object->admin)) {
+		$addadmin .= img_picto($langs->trans("AdministratorDesc"), "admin", 'class="paddingleft valignmiddle"');
 	}
 	print showValueWithClipboardCPButton($object->login).$addadmin;
 	print '</td>';
@@ -231,22 +228,15 @@ print '<br>';
 print '<span class="opacitymedium">'.$langs->trans("AgendaExtSitesDesc")."</span><br>\n";
 print "<br>\n";
 
-$selectedvalue = !getDolGlobalString('AGENDA_DISABLE_EXT') ? 0 : $conf->global->AGENDA_DISABLE_EXT;
-if ($selectedvalue == 1) {
-	$selectedvalue = 0;
-} else {
-	$selectedvalue = 1;
-}
-
 
 print '<div class="div-table-responsive-no-min">';
 print '<table class="noborder centpercent">';
-
-print "<tr class=\"liste_titre\">";
-print "<td>".$langs->trans("Parameter")."</td>";
+print '<tr class="liste_titre">';
+print '<td class="center">'.$langs->trans("AgendaExtNb", "")."</td>";
 print "<td>".$langs->trans("Name")."</td>";
 print "<td>".$langs->trans("ExtSiteUrlAgenda").'<div class="hideonsmartphone opacitymedium">'." (".$langs->trans("Example").': https://externalcalendar/agenda/agenda.ics)</div></td>';
 print "<td>".$form->textwithpicto($langs->trans("FixTZ"), $langs->trans("FillFixTZOnlyIfRequired"), 1).'</td>';
+print '<td class="nowrap">'.$form->textwithpicto($langs->trans("AgendaExtCacheDelay"), $langs->trans("AgendaExtCacheDelayDesc", 300), 1).'</td>';
 print '<td class="right">'.$langs->trans("Color").'</td>';
 print "</tr>";
 
@@ -257,10 +247,14 @@ while ($i <= $MAXAGENDA) {
 	$src = 'AGENDA_EXT_SRC_'.$id.'_'.$key;
 	$offsettz = 'AGENDA_EXT_OFFSETTZ_'.$id.'_'.$key;
 	$color = 'AGENDA_EXT_COLOR_'.$id.'_'.$key;
+	$cachedelay = 'AGENDA_EXT_CACHE_'.$id.'_'.$key;
 
 	print '<tr class="oddeven">';
 	// Nb @phan-suppress-next-line PhanPluginSuspiciousParamPosition
-	print '<td class="maxwidth50onsmartphone">'.$langs->trans("AgendaExtNb", $key)."</td>";
+	print '<td class="maxwidth50onsmartphone center">';
+	//print $langs->trans("AgendaExtNb", $key);
+	print $key;
+	print "</td>";
 	// Name
 	$name_value = (GETPOST('AGENDA_EXT_NAME_'.$id.'_'.$key) ? GETPOST('AGENDA_EXT_NAME_'.$id.'_'.$key) : (empty($object->conf->$name) ? '' : $object->conf->$name));
 	print '<td><input type="text" class="flat hideifnotset minwidth100 maxwidth100onsmartphone" name="AGENDA_EXT_NAME_'.$id.'_'.$key.'" value="'.$name_value.'"></td>';
@@ -270,6 +264,9 @@ while ($i <= $MAXAGENDA) {
 	// Offset TZ
 	$offsettz_value = (GETPOST('AGENDA_EXT_OFFSETTZ_'.$id.'_'.$key) ? GETPOST('AGENDA_EXT_OFFSETTZ_'.$id.'_'.$key) : (empty($object->conf->$offsettz) ? '' : $object->conf->$offsettz));
 	print '<td><input type="text" class="flat hideifnotset" name="AGENDA_EXT_OFFSETTZ_'.$id.'_'.$key.'" value="'.$offsettz_value.'" size="1"></td>';
+	// Cache duration
+	$cachedelay_value = (GETPOSTISSET('AGENDA_EXT_CACHE_'.$id.'_'.$key) ? GETPOSTINT('AGENDA_EXT_CACHE_'.$id.'_'.$key) : (empty($object->conf->$cachedelay) ? '' : (int) $object->conf->$cachedelay));
+	print '<td><input type="number" min="0" class="flat hideifnotset width75" name="AGENDA_EXT_CACHE_'.$id.'_'.$key.'" value="'.$cachedelay_value.'" placeholder="300"></td>';
 	// Color (Possible colors are limited by Google)
 	print '<td class="nowraponall right">';
 	$color_value = (GETPOST("AGENDA_EXT_COLOR_".$id.'_'.$key) ? GETPOST("AGENDA_EXT_COLOR_".$id.'_'.$key) : (empty($object->conf->$color) ? 'ffffff' : $object->conf->$color));
