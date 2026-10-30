@@ -535,19 +535,17 @@ class FormProjets extends Form
 	/**
 	 *    Build a HTML select list of element of same thirdparty to suggest to link them to project
 	 *
-	 * @param string $table_element Table of the element to update
-	 * @param int|string $socid If of thirdparty to use as filter or 'id1,id2,...'
-	 * @param string $morecss More CSS
-	 * @param int $limitonstatus Add filters to limit length of list to opened status (for example to avoid ERR_RESPONSE_HEADERS_TOO_BIG on project/element.php page). TODO To implement
-	 * @param string $projectkey Equivalent key  to fk_projet for actual table_element
-	 * @param string $placeholder Placeholder
-	 * @return    int|string                        The HTML select list of element or '' if nothing or -1 if KO
+	 * @param string 		$table_element 	Table of the element to update
+	 * @param int|string 	$socid 			Id of thirdparty or 'all' or 'ifcompany' or 'none' or 'onlyifcompany' or 'only	If of thirdparty to use as filter or 'id1,id2,...'
+	 * @param string 		$morecss 		Add More CSS
+	 * @param int 			$limitonstatus 	Add filters to limit length of list to opened status (for example to avoid ERR_RESPONSE_HEADERS_TOO_BIG on project/element.php page). TODO To implement
+	 * @param string 		$projectkey 	Equivalent key  to fk_projet for actual table_element
+	 * @param string 		$placeholder 	Placeholder
+	 * @return    int|string                The HTML select list of element or '' if nothing or -1 if KO
 	 */
 	public function select_element($table_element, $socid = 0, $morecss = '', $limitonstatus = -2, $projectkey = "fk_projet", $placeholder = '')
 	{
 		// phpcs:enable
-		global $conf, $langs;
-
 		if ($table_element == 'projet_task') {
 			return ''; // Special case of element we never link to a project (already always done)
 		}
@@ -568,8 +566,6 @@ class FormProjets extends Form
 		)) {
 			$linkedtothirdparty = true;
 		}
-
-		$sqlfilter = '';
 
 		//print $table_element;
 		switch ($table_element) {
@@ -623,11 +619,11 @@ class FormProjets extends Form
 		if ($linkedtothirdparty) {
 			$sql .= ", s.nom as name";
 		}
-		$sql .= " FROM " . $this->db->prefix() . $table_element . " as t";
+		$sql .= " FROM " . $this->db->prefix() . $this->db->sanitize($table_element) . " as t";
 		if ($linkedtothirdparty) {
 			$sql .= ", " . $this->db->prefix() . "societe as s";
 		}
-		$sql .= " WHERE " . $projectkey . " is null";
+		$sql .= " WHERE " . $this->db->sanitize($projectkey) . " is null";
 		if (!empty($socid) && $linkedtothirdparty) {
 			if (is_numeric($socid)) {
 				$sql .= " AND t.fk_soc = " . ((int) $socid);
@@ -640,9 +636,6 @@ class FormProjets extends Form
 		}
 		if ($linkedtothirdparty) {
 			$sql .= " AND s.rowid = t.fk_soc";
-		}
-		if ($sqlfilter) {
-			$sql .= " AND " . $sqlfilter;
 		}
 		$sql .= " ORDER BY ref DESC";
 
@@ -747,6 +740,7 @@ class FormProjets extends Form
 					} else {
 						$finallabel = ($langs->transnoentitiesnoconv("OppStatus" . $obj->code) != "OppStatus" . $obj->code ? $langs->transnoentitiesnoconv("OppStatus" . $obj->code) : $obj->label);
 						if ($showpercent) {
+							//$finallabel .= ' <span class="opacitymedium">(' . $obj->percent . '%)</span>';
 							$finallabel .= ' (' . $obj->percent . '%)';
 						}
 					}
@@ -834,6 +828,8 @@ class FormProjets extends Form
 		require_once DOL_DOCUMENT_ROOT . '/projet/class/project.class.php';
 
 		$out = '';
+		$labeltoshow = '';
+
 		if (empty($lineOnly)) {
 			// Search Invoice
 			$sql = "SELECT f.rowid, f.ref as fref,";
@@ -918,6 +914,7 @@ class FormProjets extends Form
 
 				$out .= '<select class="valignmiddle flat' . ($morecss ? ' ' . $morecss : '') . '" id="' . $htmlNameInvoiceLine . '" name="' . $htmlNameInvoiceLine . '">';
 			}
+
 			$num = $this->db->num_rows($resql);
 			if ($num) {
 				while ($obj = $this->db->fetch_object($resql)) {
@@ -956,14 +953,14 @@ class FormProjets extends Form
 	public function formOpportunityStatus($page, $selected = '', $percent_value = 0, $htmlname_status = 'none', $htmlname_percent = 'none', $filter = '', $nooutput = 0)
 	{
 		// phpcs:enable
-		global $conf, $langs;
+		global $langs;
 
 		$out = '';
 		if ($htmlname_status != "none" && $htmlname_percent != 'none') {
 			$out .= '<form method="post" action="' . $page . '">';
 			$out .= '<input type="hidden" name="action" value="set_opp_status">';
 			$out .= '<input type="hidden" name="token" value="' . newToken() . '">';
-			$out .= $this-> selectOpportunityStatus($htmlname_status, $selected, 1, 0, 0, 0, 'minwidth150 inline-block valignmiddle', 1, 1);
+			$out .= $this->selectOpportunityStatus($htmlname_status, $selected, 1, 0, 0, 0, 'minwidth150 inline-block valignmiddle', 1, 1);
 			$out .= ' / <span title="'.$langs->trans("OpportunityProbability").'"> ';
 			$out .= '<input class="width50 right" type="text" id="'.$htmlname_percent.'" name="'.$htmlname_percent.'" title="'.dol_escape_htmltag($langs->trans("OpportunityProbability")).'" value="'.$percent_value.'"> %';
 			$out .= '</span>';
@@ -972,10 +969,11 @@ class FormProjets extends Form
 		} else {
 			if ($selected > 0) {
 				$code = dol_getIdFromCode($this->db, $selected, 'c_lead_status', 'rowid', 'code');
-				$out .= $langs->trans("OppStatus".$code);
+
+				$out .= '<span class="badge badge-oppstatus valignmiddle">'.$langs->trans("OppStatus".$code).'</span>';
 
 				// Opportunity percent
-				$out .= ' / <span title="'.$langs->trans("OpportunityProbability").'"> ';
+				$out .= ' &nbsp; <span class="badge badge-oppstatus-percent valignmiddle" title="'.$langs->trans("OpportunityProbability").'"> ';
 				$out .= price($percent_value, 0, $langs, 1, 0).' %';
 				$out .= '</span>';
 			} else {

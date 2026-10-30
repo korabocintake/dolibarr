@@ -57,14 +57,16 @@ if (GETPOSTISSET('THEME_SATURATE_RATIO')) {
 	vertical-align: middle;
 	white-space: nowrap;
 	display: inline-block;
+	line-height: 30px;
 }
 
 .nonature-back {
-	background-color: #EEE;
+	background-color: var(--colorwhitelight);
 	padding: 2px;
 	margin: 2px;
 	border-radius: 3px;
 }
+
 .prospect-back {
 	background-color: #a7c5b0 !important;
 	color: #FFF !important;
@@ -457,7 +459,7 @@ a.info-box-text-a i.fa.fa-exclamation-triangle, span.badge i.fa.fa-exclamation-t
 	font-size: 0.88em;
 }
 .info-box-desc {
-	font-size: 0.92em;
+	font-size: 0.91em;
 }
 /* Force values for small screen 480 */
 /*

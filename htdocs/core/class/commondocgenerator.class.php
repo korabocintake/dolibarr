@@ -186,14 +186,14 @@ abstract class CommonDocGenerator
 	/**
 	 * Local tax rates Array[tax_type][tax_rate]
 	 *
-	 * @var array<int,array<string,float>>
+	 * @var array<int|string,array<string,float>>
 	 */
 	public $localtax1;
 
 	/**
 	 * Local tax rates Array[tax_type][tax_rate]
 	 *
-	 * @var array<int,array<string,float>>
+	 * @var array<int|string,array<string,float>>
 	 */
 	public $localtax2;
 
@@ -224,7 +224,7 @@ abstract class CommonDocGenerator
 	public $phpmin = array(7, 1);
 
 	/**
-	 * @var array<string,array{rank:int,width:float|false,status:bool|int<0,1>,border-left?:bool,title:array{textkey:string,label?:string,align?:string,padding?:array{0:float,1:float,2:float,3:float}},content?:array{align?:string,padding?:array{0:float,1:float,2:float,3:float}}}>	Array of document table columns
+	 * @var array<string,array{rank:int,width:float|int|false,status:bool|int<0,1>,border-left?:bool,title:array{textkey:string,label?:string,align?:string,padding?:array{0:float|int,1:float|int,2:float|int,3:float|int}},content?:array{align?:string,padding?:array{0:float|int,1:float|int,2:float|int,3:float|int}}}>	Array of document table columns
 	 */
 	public $cols;
 
@@ -758,7 +758,7 @@ abstract class CommonDocGenerator
 			$array_key.'_remain_to_pay' => price2num($object->total_ttc - $already_payed_all, 'MT')
 		);
 
-		if (in_array($object->element, array('facture', 'invoice', 'supplier_invoice', 'facture_fournisseur'))) {
+		if (in_array($object->element, array('facture', 'invoice', 'supplier_invoice', 'facture_fournisseur', 'commande'))) {
 			$bank_account = null;
 
 			if (property_exists($object, 'fk_account') && $object->fk_account > 0) {
@@ -891,8 +891,9 @@ abstract class CommonDocGenerator
 			'line_up_locale' => price($line->subprice, 0, $outputlangs),
 			'line_total_up' => price2num($line->subprice * (float) $line->qty),
 			'line_total_up_locale' => price($line->subprice * (float) $line->qty, 0, $outputlangs),
-			'line_qty' => $line->qty,
-			'line_qty_locale' => price($line->qty),
+			// A title or subtotal line of the Subtotals module (special_code 3) carries the level in qty, not a quantity. The PDF hides it, see pdf_getlineqty().
+			'line_qty' => (empty($line->special_code) || $line->special_code != 3) ? $line->qty : '',
+			'line_qty_locale' => (empty($line->special_code) || $line->special_code != 3) ? price($line->qty) : '',
 			'line_discount_percent' => ($line->remise_percent ? $line->remise_percent.'%' : ''),
 			'line_price_ht' => price2num($line->total_ht),
 			'line_price_ttc' => price2num($line->total_ttc),
@@ -1582,15 +1583,20 @@ abstract class CommonDocGenerator
 
 		$parameters = array(
 			'curY' => &$curY,
-			'columnText' => $columnText,
+			'columnText' => &$columnText,
 			'colKey' => $colKey,
 			'pdf' => &$pdf,
 		);
 		$reshook = $hookmanager->executeHooks('printStdColumnContent', $parameters, $this); // Note that $action and $object may have been modified by hook
-		if ($reshook < 0) {
-			setEventMessages($hookmanager->error, $hookmanager->errors, 'errors');
+		if ($reshook > 0 && isset($hookmanager->resArray['columnText'])) {
+			$columnText = $hookmanager->resArray['columnText'];
 		}
-		if (!$reshook) {
+		if ($reshook < 0) {
+			$this->error = $hookmanager->error;
+			$this->errors = $hookmanager->errors;
+			dol_syslog(__METHOD__.' '.$this->error, LOG_ERR);
+		}
+		if (!$reshook || $reshook > 0) {
 			if (empty($columnText)) {
 				return 0;
 			}
@@ -1664,7 +1670,9 @@ abstract class CommonDocGenerator
 		);
 		$reshook = $hookmanager->executeHooks('printColDescContent', $parameters, $this); // Note that $action and $object may have been modified by hook
 		if ($reshook < 0) {
-			setEventMessages($hookmanager->error, $hookmanager->errors, 'errors');
+			$this->error = $hookmanager->error;
+			$this->errors = $hookmanager->errors;
+			dol_syslog(__METHOD__.' '.$this->error, LOG_ERR);
 		}
 	}
 
@@ -1732,7 +1740,9 @@ abstract class CommonDocGenerator
 		);
 		$reshook = $hookmanager->executeHooks('getPDFExtrafieldContent', $parameters, $this); // Note that $action and $object may have been modified by hook
 		if ($reshook < 0) {
-			setEventMessages($hookmanager->error, $hookmanager->errors, 'errors');
+			$this->error = $hookmanager->error;
+			$this->errors = $hookmanager->errors;
+			dol_syslog(__METHOD__.' '.$this->error, LOG_ERR);
 		}
 		if ($reshook) {
 			$extrafieldOutputContent = $hookmanager->resPrint;
@@ -1760,6 +1770,7 @@ abstract class CommonDocGenerator
 
 		// Load extrafields if not already done
 		if (is_null($this->extrafieldsCache)) {
+			include_once DOL_DOCUMENT_ROOT.'/core/class/extrafields.class.php';
 			$this->extrafieldsCache = new ExtraFields($this->db);
 		}
 		if (empty($this->extrafieldsCache->attributes[$object->table_element])) {
@@ -1809,9 +1820,16 @@ abstract class CommonDocGenerator
 					$enabled = (int) dol_eval((string) $extrafields->attributes[$object->table_element]['enabled'][$key], 1, 1, '2');
 				}
 
+				if (!$enabled) {
+					continue;
+				}
+
+				// Reset enabled: only printable attribute determines PDF visibility
+				$enabled = 0;
 				$disableOnEmpty = 0;
-				if ($enabled && !empty($extrafields->attributes[$object->table_element]['printable'][$key])) {
-					$printable = intval($extrafields->attributes[$object->table_element]['printable'][$key]);
+				$printable = 0;
+				if (!empty($extrafields->attributes[$object->table_element]['printable'][$key])) {
+					$printable = (int) $extrafields->attributes[$object->table_element]['printable'][$key];
 					if (in_array($printable, $params['printableEnable']) || in_array($printable, $params['printableEnableNotEmpty'])) {
 						$enabled = 1;
 					}
@@ -1821,11 +1839,7 @@ abstract class CommonDocGenerator
 					}
 				}
 
-				if (empty($extrafields->attributes[$object->table_element]['printable'][$key])) {
-					continue;
-				}
-
-				if (empty($enabled)) {
+				if (empty($enabled) || empty($printable)) {
 					continue;
 				}
 
@@ -1966,7 +1980,7 @@ abstract class CommonDocGenerator
 	 * @param float			$tab_top        Tab top position
 	 * @param float			$tab_height     Default tab height
 	 * @param Translate		$outputlangs    Output language
-	 * @param int			$hidetop        Hide top
+	 * @param int<0,1>		$hidetop        Hide top
 	 * @return float						Height of col tab titles
 	 */
 	public function pdfTabTitles(&$pdf, $tab_top, $tab_height, $outputlangs, $hidetop = 0)
@@ -1985,7 +1999,9 @@ abstract class CommonDocGenerator
 
 			$reshook = $hookmanager->executeHooks('pdfTabTitles', $parameters, $this); // Note that $object may have been modified by hook
 			if ($reshook < 0) {
-				setEventMessages($hookmanager->error, $hookmanager->errors, 'errors');
+				$this->error = $hookmanager->error;
+				$this->errors = $hookmanager->errors;
+				dol_syslog(__METHOD__.' '.$this->error, LOG_ERR);
 			} elseif (empty($reshook)) {
 				if (!$this->getColumnStatus($colKey)) {
 					continue;
@@ -2005,6 +2021,9 @@ abstract class CommonDocGenerator
 
 					// Add space for lines (more if we need to show a second alternative language)
 					global $outputlangsbis;
+					/** @var Translate $outputlangsbis */
+					'@phan-var-force Translate $outputlangsbis';
+
 					if (is_object($outputlangsbis)) {
 						// set cell padding with column title definition
 						$pdf->setCellPaddings($colDef['title']['padding'][3], $colDef['title']['padding'][0], $colDef['title']['padding'][1], 0.5);

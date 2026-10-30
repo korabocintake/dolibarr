@@ -1,13 +1,14 @@
 <?php
-/* Copyright (C) 2004		Rodolphe Quiedeville	<rodolphe@quiedeville.org>
- * Copyright (C) 2004-2012	Laurent Destailleur		<eldy@users.sourceforge.net>
- * Copyright (C) 2005-2012	Regis Houssin			<regis.houssin@inodbox.com>
- * Copyright (C) 2015		Raphaël Doursenaud		<rdoursenaud@gpcsolutions.fr>
- * Copyright (C) 2021-2025  Frédéric France			<frederic.france@free.fr>
- * Copyright (C) 2023		Gauthier VERDOL			<gauthier.verdol@atm-consulting.fr>
- * Copyright (C) 2024-2026	MDW						<mdeweerd@users.noreply.github.com>
- * Copyright (C) 2024		Vincent de Grandpré		<vincent@de-grandpre.quebec>
- * Copyright (C) 2025		Alexandre Spangaro		<alexandre@inovea-conseil.com>
+/* Copyright (C) 2004       Rodolphe Quiedeville    <rodolphe@quiedeville.org>
+ * Copyright (C) 2004-2012  Laurent Destailleur     <eldy@users.sourceforge.net>
+ * Copyright (C) 2005-2012  Regis Houssin           <regis.houssin@inodbox.com>
+ * Copyright (C) 2015       Raphaël Doursenaud      <rdoursenaud@gpcsolutions.fr>
+ * Copyright (C) 2021-2026  Frédéric France         <frederic.france@free.fr>
+ * Copyright (C) 2023       Gauthier VERDOL         <gauthier.verdol@atm-consulting.fr>
+ * Copyright (C) 2024-2026  MDW                     <mdeweerd@users.noreply.github.com>
+ * Copyright (C) 2024       Vincent de Grandpré     <vincent@de-grandpre.quebec>
+ * Copyright (C) 2025       Alexandre Spangaro      <alexandre@inovea-conseil.com>
+ * Copyright (C) 2026       Solution Libre SAS      <contact@solution-libre.fr>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -31,10 +32,13 @@
 include_once 'inc.php';
 
 /**
+ * @var DoliDB $b
  * @var Conf $conf
  * @var Translate $langs
  *
+ * @var string $dolibarr_main_data_root
  * @var string $dolibarr_main_document_root
+ * @var string $dolibarr_main_db_character_set
  * @var string $dolibarr_main_db_host
  * @var string $dolibarr_main_db_port
  * @var string $dolibarr_main_db_name
@@ -75,7 +79,7 @@ error_reporting($err);
 $setuplang = GETPOST("selectlang", 'aZ09', 3) ? GETPOST("selectlang", 'aZ09', 3) : 'auto';
 $langs->setDefaultLang($setuplang);
 
-$langs->loadLangs(array("admin", "install", "other"));
+$langs->loadLangs(array("main", "errors", "admin", "install", "other"));
 
 if ($dolibarr_main_db_type == "mysqli") {
 	$choix = 1;
@@ -94,18 +98,37 @@ if (!is_object($conf)) {
 }
 
 
+// This page runs on the install bootstrap, which never sets $user.
+// dol_delete_file() -> EcmFiles::delete(User $user) requires a User,
+// so we force an empty one here, before any action that may need it.
+require_once DOL_DOCUMENT_ROOT.'/user/class/user.class.php';
+
+// The installer does not initialize the session and CSRF token like main.inc.php.
+if (session_status() === PHP_SESSION_NONE) {
+	session_start();
+}
+if (empty($_SESSION['newtoken'])) {
+	$_SESSION['newtoken'] = bin2hex(random_bytes(32));
+}
+$ecmrepairbufferlevel = ob_get_level();
+$ecmrepairpost = GETPOST('clean_ecm_files_table', 'aZ09') === 'confirmed' && ($_SERVER['REQUEST_METHOD'] ?? '') === 'POST';
+if ($ecmrepairpost) {
+	ob_start(); // Allow a redirect after the installer has rendered its progress output.
+}
+
+
 /*
  * View
  */
 
-$form = new Form($db);
-
-pHeader($langs->trans("Repair"), "upgrade2", GETPOST('action', 'aZ09'));
+pHeader($langs->trans("Repair"), "repair", GETPOST('action', 'aZ09'));
+print '<input type="hidden" name="token" value="'.newToken().'">';
+dol_htmloutput_events();
 
 // Action to launch the repair script
 $actiondone = 1;
 
-
+print '<div class="div-table-responsive-no-min">';
 print '<table cellspacing="0" cellpadding="1" class="centpercent">';
 $error = 0;
 
@@ -137,6 +160,9 @@ $conf->db->dolibarr_main_db_encryption = isset($dolibarr_main_db_encryption) ? $
 $conf->db->dolibarr_main_db_cryptkey = isset($dolibarr_main_db_cryptkey) ? $dolibarr_main_db_cryptkey : '';
 
 $db = getDoliDBInstance($conf->db->type, $conf->db->host, (string) $conf->db->user, (string) $conf->db->pass, (string) $conf->db->name, (int) $conf->db->port);
+$user = new User($db);
+
+$form = new Form($db);
 
 if ($db->connected) {
 	print '<tr><td class="nowrap">';
@@ -173,21 +199,41 @@ if ($ok) {
 }
 
 print '</table>';
-
+print '</div>';
 
 print '<br>';
 
 
-print '<div class="warning" style="padding-top: 10px">';
+$conf->setValues($db);
+// Reset forced setup after the setValues
+if (defined('SYSLOG_FILE')) {
+	$conf->global->SYSLOG_FILE = constant('SYSLOG_FILE');
+}
+$conf->global->MAIN_ENABLE_LOG_TO_HTML = 1;
+
+// Maintenance runs under the installer lock, without an authenticated application user.
+$ecmrepairentities = array(1 => $langs->trans('Entity').' 1');
+if (isModEnabled('multicompany')) {
+	$resql = $db->query("SELECT rowid, label FROM ".$db->prefix()."entity ORDER BY rowid");
+	if ($resql) {
+		while (is_object($obj = $db->fetch_object($resql))) {
+			$ecmrepairentities[(int) $obj->rowid] = dol_html_entity_decode($obj->label, 0);
+		}
+		$db->free($resql);
+	}
+}
+$ecmrepairentity = GETPOSTISSET('ecm_entity') ? GETPOSTINT('ecm_entity') : 1;
+
+print '<div class="info" style="padding-top: 10px">';
 print 'Select a link "test" or "confirmed" to launch a reparation on the chosen option...';
 print '</div>';
 print '<br>';
 
-
+print '<div class="div-table-responsive-no-min">';
 print '<table class="liste centpercent" style="border: 1px solid #ccc">';
 print '<tr>';
-print '<th>Option</th>';
-print '<th>Information</th>';
+print '<th></th>';
+print '<th></th>';
 print '<th>Launch test</th>';
 print '<th>Launch confirmed</th>';
 print '</tr>';
@@ -198,10 +244,10 @@ if ($dolibarr_main_db_character_set != 'utf8mb4') {
 }
 
 $sections = [
-	'Standard' => [
+	'Miscellaneous' => [
 		[
 			'name' => 'standard',
-			'info' => ''
+			'info' => 'Miscellaneous fixes'
 		]
 	],
 	'Modules' => [
@@ -259,7 +305,7 @@ $sections = [
 			'info' => 'Repair link between dispatch lines and supplier order lines'
 		]
 	],
-	'Init data' => [
+	'Init empty data' => [
 		[
 			'name' => 'set_empty_time_spent_amount',
 			'info' => 'Init empty time spent amount'
@@ -278,14 +324,17 @@ $sections = [
 			'name' => 'force_collation_from_conf_on_tables',
 			'info' => 'Force '.$conf->db->character_set.'/'.$conf->db->dolibarr_main_db_collation.' + row=dynamic, for mysql/mariadb only'
 		]
-	],
-	'Rebuild sequence' => [
+	]
+];
+
+if ($db->type == 'pgsql') {
+	$sections['Rebuild sequence'] = [
 		[
 			'name' => 'rebuild_sequences',
 			'info' => 'For postgresql only'
 		]
-	]
-];
+	];
+}
 
 $conf->use_javascript_ajax = 1;
 
@@ -297,8 +346,8 @@ foreach ($sections as $section => $options) {
 		$tooltip = empty($opt['tooltip']) ? '' : $opt['tooltip'];
 		$value = GETPOST($option, 'alpha') ? GETPOST($option, 'alpha') : 'undefined';
 		// Generate links with the right option and value
-		$url_test = $_SERVER['PHP_SELF'].'?'.$option.'=test';
-		$url_confirmed = $_SERVER['PHP_SELF'].'?'.$option.'=confirmed';
+		$url_test = $_SERVER['PHP_SELF'].'?'.$option.'=test#pleasebepatient';
+		$url_confirmed = $_SERVER['PHP_SELF'].'?'.$option.'=confirmed#pleasebepatient';
 		print '<tr>';
 		print '<td>' . $option . '</td>';
 		print '<td>';
@@ -307,25 +356,29 @@ foreach ($sections as $section => $options) {
 		} else {
 			print $info;
 		}
+		if ($option == 'clean_ecm_files_table') {
+			print '<br><label for="ecm_entity">'.$langs->trans('RepairEcmEntity').'</label> ';
+			print '<link rel="stylesheet" href="../public/includes/jquery/plugins/select2/dist/css/select2.css">';
+			print '<script src="../public/includes/jquery/plugins/select2/dist/js/select2.full.min.js"></script>';
+			print $form->selectarray('ecm_entity', $ecmrepairentities, $ecmrepairentity, 0, 0, 0, 'style="width: 220px"', 0, 0, 0, '', 'minwidth150');
+		}
 		print '</td>';
-		print '<td class="center"><a href="'.$url_test.'" title="Launch test on option '.$option.'">test</a>'.($value == 'test' ? ' (X)' : '').'</td>';
-		print '<td class="center"><a href="'.$url_confirmed.'" title="Launch confirmed on option '.$option.'">confirmed</a>'.($value == 'confirmed' ? ' (X)' : '').'</td>';
+		if ($option == 'clean_ecm_files_table') {
+			print '<td class="center"><button class="button" type="submit" name="clean_ecm_files_table" value="test">'.$langs->trans('Test').'</button></td>';
+			print '<td class="center"><button class="button" type="submit" name="clean_ecm_files_table" value="confirmed">'.$langs->trans('Repair').'</button></td>';
+		} else {
+			print '<td class="center"><a href="'.$url_test.'" title="Launch test on option '.$option.'">test</a>'.($value == 'test' ? ' (launched)' : '').'</td>';
+			print '<td class="center"><a href="'.$url_confirmed.'" title="Launch repair on option '.$option.'">repair</a>'.($value == 'confirmed' ? ' (launched)' : '').'</td>';
+		}
 		print '</tr>';
 	}
 }
 print '</table>';
+print '</div>';
 
 
 print '<br id="sectionresult">';
 print '<br>';
-
-
-$conf->setValues($db);
-// Reset forced setup after the setValues
-if (defined('SYSLOG_FILE')) {
-	$conf->global->SYSLOG_FILE = constant('SYSLOG_FILE');
-}
-$conf->global->MAIN_ENABLE_LOG_TO_HTML = 1;
 
 
 /* Start action here */
@@ -338,13 +391,18 @@ $oneoptionset = (GETPOST('standard', 'alpha') || GETPOST('restore_thirdparties_l
 	|| GETPOST('rebuild_sequences', 'alpha') || GETPOST('recalculateinvoicetotal', 'alpha')) || GETPOST('repair_mailing_path', 'alpha');
 
 if ($ok && $oneoptionset) {
+	print '<div id="pleasebepatient"></div>';
 	// Show wait message
 	print $langs->trans("PleaseBePatient").'<br><br>';
 
 	// Flush (some browser need a certain amount of data)
 	print str_repeat(' ', 1024);
-	ob_flush();
-	flush();
+	if (!$ecmrepairpost) {
+		if (ob_get_level() > 0) {
+			ob_flush();
+		}
+		flush();
+	}
 }
 
 
@@ -382,7 +440,7 @@ if ($ok && GETPOST('standard', 'alpha')) {
 		print '<tr><td class="nowrap">*** ';
 		print $langs->trans("Script").'</td><td class="right">'.$file.'</td></tr>';
 
-		$name = substr($file, 0, dol_strlen($file) - 4);
+		$name = dol_substr($file, 0, dol_strlen($file) - 4);
 
 		// Run sql script
 		$ok = run_sql($dir.$file, 0, 0, 1);
@@ -396,8 +454,8 @@ if ($ok && GETPOST('standard', 'alpha')) {
 	require_once DOL_DOCUMENT_ROOT.'/contrat/class/contratligne.class.php';
 
 	print '<tr><td colspan="2"><br>*** Update denormalized_lower_planned_end_date.</td></tr>';
-	$sqltoupdatecontract = "UPDATE ".MAIN_DB_PREFIX."contrat as c";
-	$sqltoupdatecontract .= " SET c.denormalized_lower_planned_end_date = (SELECT MIN(date_fin_validite) FROM ".MAIN_DB_PREFIX."contratdet as cd WHERE cd.fk_contrat = c.rowid AND cd.statut = ".ContratLigne::STATUS_OPEN.")";
+	$sqltoupdatecontract = "UPDATE ".MAIN_DB_PREFIX."contrat";
+	$sqltoupdatecontract .= " SET denormalized_lower_planned_end_date = (SELECT MIN(date_fin_validite) FROM ".MAIN_DB_PREFIX."contratdet as cd WHERE cd.fk_contrat = c.rowid AND cd.statut = ".ContratLigne::STATUS_OPEN.")";
 	$resqltoupdatecontract = $db->query($sqltoupdatecontract);
 
 	$extrafields = new ExtraFields($db);
@@ -411,7 +469,7 @@ if ($ok && GETPOST('standard', 'alpha')) {
 				'fichinter' => 'fichinter', 'fichinterdet' => 'fichinterdet',
 				'inventory' => 'inventory',
 				'actioncomm' => 'actioncomm', 'bom_bom' => 'bom_bom', 'mrp_mo' => 'mrp_mo',
-				'adherent_type' => 'adherent_type', 'user' => 'user', 'partnership' => 'partnership', 'projet' => 'projet', 'projet_task' => 'projet_task', 'ticket' => 'ticket');
+				'adherent_type' => 'adherent_type', 'user' => 'user', 'partnership' => 'partnership', 'projet' => 'projet', 'projet_task' => 'projet_task', 'ticket' => 'ticket', 'payment_various' => 'payment_various');
 	//$listofmodulesextra = array('fichinter'=>'fichinter');
 
 	print '<tr><td colspan="2"><br>*** Check that fields into the extra table structure match the table of definition. If not, add column into table</td></tr>';
@@ -549,13 +607,13 @@ if ($ok && GETPOST('standard', 'alpha')) {
 				$obj = $db->fetch_object($resql);
 
 				$reg = array();
-				if (preg_match('/MAIN_MODULE_([^_]+)_(.+)/i', $obj->name, $reg)) {
+				if (preg_match('/MAIN_MODULE_([^_\W]+)_(\w+)/i', $obj->name, $reg)) {
 					$name = $reg[1];
 					$type = $reg[2];
 
 					$sql2 = "SELECT COUNT(*) as nb";
 					$sql2 .= " FROM ".MAIN_DB_PREFIX."const as c";
-					$sql2 .= " WHERE name = 'MAIN_MODULE_".$name."'";
+					$sql2 .= " WHERE name = 'MAIN_MODULE_".$db->sanitize($name)."'";
 					$sql2 .= " AND entity = ".((int) $obj->entity);
 					$resql2 = $db->query($sql2);
 					if ($resql2) {
@@ -607,13 +665,13 @@ if ($ok && GETPOST('standard', 'alpha')) {
 				$obj = $db->fetch_object($resql);
 
 				$reg = array();
-				if (preg_match('/^(.+)@(.+)$/i', $obj->file, $reg)) {
+				if (preg_match('/^(\w+)@(\w+)$/i', $obj->file, $reg)) {
 					$name = $reg[1];
 					$module = $reg[2];
 
 					$sql2 = "SELECT COUNT(*) as nb";
 					$sql2 .= " FROM ".MAIN_DB_PREFIX."const as c";
-					$sql2 .= " WHERE name = 'MAIN_MODULE_".strtoupper($module)."'";
+					$sql2 .= " WHERE name = 'MAIN_MODULE_".strtoupper($module)."'";  // @phan-suppress-current-line SqlInjection
 					$sql2 .= " AND entity = ".((int) $obj->entity);
 					$sql2 .= " AND value <> 0";
 					$resql2 = $db->query($sql2);
@@ -888,6 +946,7 @@ if ($ok && GETPOST('clean_menus', 'alpha')) {
 	$sql = "SELECT rowid, module";
 	$sql .= " FROM ".MAIN_DB_PREFIX."menu as c";
 	$sql .= " WHERE module IS NOT NULL AND module <> ''";
+	$sql .= " AND c.entity = ".((int) $conf->entity);
 	$sql .= " ORDER BY module";
 
 	$resql = $db->query($sql);
@@ -926,6 +985,7 @@ if ($ok && GETPOST('clean_menus', 'alpha')) {
 						print ' - Module condition '.$modulecond.' seems ko, we delete menu entry.';
 						if (GETPOST('clean_menus') == 'confirmed') {
 							$sql2 = "DELETE FROM ".MAIN_DB_PREFIX."menu WHERE module = '".$db->escape($modulecond)."'";
+							$sql2 .= " AND entity = ".((int) $conf->entity);
 							$resql2 = $db->query($sql2);
 							if (!$resql2) {
 								$error++;
@@ -1046,7 +1106,7 @@ if ($ok && GETPOST('clean_orphelin_dir', 'alpha')) {
 				// To show ref or specific information according to view to show (defined by $module)
 				if ($modulepart == 'invoice') {
 					preg_match('/(.*)\/[^\/]+$/', $relativefile, $reg);
-					$ref = $reg[1];
+					$ref = empty($reg[1]) ? '' : $reg[1];
 				}
 				if ($modulepart == 'invoice_supplier') {
 					preg_match('/(\d+)\/[^\/]+$/', $relativefile, $reg);
@@ -1054,23 +1114,23 @@ if ($ok && GETPOST('clean_orphelin_dir', 'alpha')) {
 				}
 				if ($modulepart == 'propal') {
 					preg_match('/(.*)\/[^\/]+$/', $relativefile, $reg);
-					$ref = $reg[1];
+					$ref = empty($reg[1]) ? '' : $reg[1];
 				}
 				if ($modulepart == 'order') {
 					preg_match('/(.*)\/[^\/]+$/', $relativefile, $reg);
-					$ref = $reg[1];
+					$ref = empty($reg[1]) ? '' : $reg[1];
 				}
 				if ($modulepart == 'order_supplier') {
 					preg_match('/(.*)\/[^\/]+$/', $relativefile, $reg);
-					$ref = $reg[1];
+					$ref = empty($reg[1]) ? '' : $reg[1];
 				}
 				if ($modulepart == 'contract') {
 					preg_match('/(.*)\/[^\/]+$/', $relativefile, $reg);
-					$ref = $reg[1];
+					$ref = empty($reg[1]) ? '' : $reg[1];
 				}
 				if ($modulepart == 'tax') {
 					preg_match('/(\d+)\/[^\/]+$/', $relativefile, $reg);
-					$id = $reg[1];
+					$id = empty($reg[1]) ? '' : $reg[1];
 				}
 
 				if (($id || $ref) && $object_instance !== null) {
@@ -1251,7 +1311,7 @@ if ($ok && GETPOST('set_empty_time_spent_amount', 'alpha')) {
 
 				if (GETPOST('set_empty_time_spent_amount') == 'confirmed') {
 					$sql2 = "UPDATE ".MAIN_DB_PREFIX."element_time";
-					$sql2 .= " SET thm = ".$obj->user_thm." WHERE thm IS NULL AND fk_user = ".((int) $obj->user_id);
+					$sql2 .= " SET thm = ".((float) $obj->user_thm)." WHERE thm IS NULL AND fk_user = ".((int) $obj->user_id);
 					$resql2 = $db->query($sql2);
 					if (!$resql2) {
 						$error++;
@@ -1349,13 +1409,13 @@ if ($ok && GETPOST('force_disable_of_modules_not_found', 'alpha')) {
 							if (!$result) {
 								print ' - File of '.$key.' ('.$reloffile.') NOT found, we disable the module.';
 								if (GETPOST('force_disable_of_modules_not_found') == 'confirmed') {
-									$sql2 = "DELETE FROM ".MAIN_DB_PREFIX."const WHERE name = 'MAIN_MODULE_".strtoupper($name)."_".strtoupper($key)."'";
+									$sql2 = "DELETE FROM ".MAIN_DB_PREFIX."const WHERE name = 'MAIN_MODULE_".strtoupper($name)."_".strtoupper($key)."'";  // @phan-suppress-current-line SqlInjection
 									$resql2 = $db->query($sql2);
 									if (!$resql2) {
 										$error++;
 										dol_print_error($db);
 									}
-									$sql3 = "DELETE FROM ".MAIN_DB_PREFIX."const WHERE name = 'MAIN_MODULE_".strtoupper($name)."'";
+									$sql3 = "DELETE FROM ".MAIN_DB_PREFIX."const WHERE name = 'MAIN_MODULE_".strtoupper($name)."'";  // @phan-suppress-current-line SqlInjection
 									$resql3 = $db->query($sql3);
 									if (!$resql3) {
 										$error++;
@@ -1406,6 +1466,7 @@ if ($ok && GETPOST('clean_perm_table', 'alpha')) {
 	}
 
 	$sql = "SELECT id, libelle as label, module from ".MAIN_DB_PREFIX."rights_def WHERE module NOT IN (".$db->sanitize($listofmods, 1).") AND id > 100000";
+	$sql .= " AND entity = ".((int) $conf->entity);
 
 	$resql = $db->query($sql);
 	if ($resql) {
@@ -1416,8 +1477,9 @@ if ($ok && GETPOST('clean_perm_table', 'alpha')) {
 				$obj = $db->fetch_object($resql);
 				if ($obj->id > 0) {
 					print '<tr><td>Found line with id '.$obj->id.', label "'.$obj->label.'" of module "'.$obj->module.'" to delete';
-					if (GETPOST('clean_perm_table', 'alpha') == 'confirmed') {
+					if (GETPOST('clean_perm_table', 'alpha') == 'confirmed') { // If confirmed, proceed with deletion
 						$sqldelete = "DELETE FROM ".MAIN_DB_PREFIX."rights_def WHERE id = ".((int) $obj->id);
+						$sqldelete .= " AND entity = ".((int) $conf->entity);
 						$resqldelete = $db->query($sqldelete);
 						if (!$resqldelete) {
 							dol_print_error($db);
@@ -1439,55 +1501,37 @@ if ($ok && GETPOST('clean_perm_table', 'alpha')) {
 
 // clean_old_module_entries: Clean data into const when files of module were removed without being
 if ($ok && GETPOST('clean_ecm_files_table', 'alpha')) {
-	print '<tr><td colspan="2"><br>*** Clean table ecm_files from lines of entries whose physical files does not exists anymore (emplemented for entity 1 only)</td></tr>';
-
-	$MAXTODELETE = 100;
-
-	$sql = "SELECT rowid, filename, filepath, entity from ".MAIN_DB_PREFIX."ecm_files";
-	$sql .= " WHERE entity = 1";
-	$sql .= " ORDER BY rowid ASC";
-
-	$nbfile = 0;
-	$nbfiletodelete = 0;
-
-	$resql = $db->query($sql);
-	if ($resql) {
-		$num = $db->num_rows($resql);
-		if ($num) {
-			$i = 0;
-			while ($i < $num) {
-				$obj = $db->fetch_object($resql);
-				if ($obj->rowid > 0) {
-					$filetocheck = DOL_DATA_ROOT.'/'.$obj->filepath.'/'.$obj->filename;
-					$nbfile++;
-					if (!dol_is_file($filetocheck) && !dol_is_file($filetocheck.'.noexe')) {
-						$nbfiletodelete++;
-						if ($nbfiletodelete <= $MAXTODELETE) {
-							print '<tr><td>Found line with id '.$obj->rowid.', entity '.$obj->entity.', file "'.$filetocheck.'" to delete';
-							if (GETPOST('clean_ecm_files_table', 'alpha') == 'confirmed') {
-								$sqldelete = "DELETE FROM ".MAIN_DB_PREFIX."ecm_files WHERE rowid = ".((int) $obj->rowid);
-								$resqldelete = $db->query($sqldelete);
-								if (!$resqldelete) {
-									dol_print_error($db);
-								}
-								print ' - deleted';
-							}
-							print '</td></tr>';
-						} else {
-							break;
-						}
-					}
-				}
-				$i++;
-			}
-		}
-		if ($nbfiletodelete > $MAXTODELETE) {
-			print '<tr><td>There is more than '.$MAXTODELETE.' invalid entries into ecm_files index table (among '.$nbfile.' analyzed) with no valid physical files. Run the page several time to process all of them.</td></tr>';
-		} else {
-			print '<tr><td>Nb of entries processed into ecm_files index table: '.$nbfile.', number of invalid record: '.$nbfiletodelete.'</td></tr>';
-		}
+	$ecmrepairmode = GETPOST('clean_ecm_files_table', 'aZ09');
+	$ecmrepairtoken = GETPOST('token', 'alphanohtml');
+	if (!in_array($ecmrepairmode, array('test', 'confirmed'), true) || $ecmrepairentity <= 0 || !isset($ecmrepairentities[$ecmrepairentity])) {
+		print '<tr><td class="error">'.$langs->trans('ErrorWrongParameters').'</td></tr>';
+	} elseif ($ecmrepairmode === 'confirmed' && (($_SERVER['REQUEST_METHOD'] ?? '') !== 'POST' || !is_string($ecmrepairtoken) || !hash_equals(newToken(), $ecmrepairtoken))) {
+		print '<tr><td class="error">'.$langs->trans('RepairEcmInvalidToken').'</td></tr>';
 	} else {
-		dol_print_error($db);
+		print '<tr><td colspan="2"><br>'.$langs->trans('RepairEcmHeading', dol_escape_htmltag($ecmrepairentities[$ecmrepairentity])).'</td></tr>';
+		$ecmreport = repairEcmFiles($db, $ecmrepairentity, DOL_DATA_ROOT, $ecmrepairmode === 'confirmed');
+		foreach ($ecmreport['entries'] as $ecmentry) {
+			print '<tr><td>'.((int) $ecmentry['id']).'</td><td>'.dol_escape_htmltag($ecmentry['path']).'</td></tr>';
+		}
+		print '<tr><td colspan="2">'.$langs->trans('RepairEcmSummary', $ecmreport['processed'], $ecmreport['missing'], $ecmreport['deleted'], $ecmreport['skipped']).'</td></tr>';
+		if ($ecmrepairmode === 'test') {
+			print '<tr><td colspan="2">'.$langs->trans('RepairEcmTestMode').'</td></tr>';
+		}
+		if ($ecmreport['limitreached']) {
+			print '<tr><td colspan="2">'.$langs->trans('RepairEcmLimit', 100).'</td></tr>';
+		}
+		if ($ecmreport['error'] !== '') {
+			print '<tr><td colspan="2" class="error">'.$langs->trans($ecmreport['error']).'</td></tr>';
+		}
+		if ($ecmrepairmode === 'confirmed' && $ecmreport['error'] === '') {
+			setEventMessages($langs->trans('RepairEcmCompleted', dol_escape_htmltag($ecmrepairentities[$ecmrepairentity]), $ecmreport['deleted']), null, 'mesgs');
+			while (ob_get_level() > $ecmrepairbufferlevel) {
+				ob_end_clean();
+			}
+			$db->close();
+			header('Location: '.$_SERVER['PHP_SELF'].'?clean_ecm_files_table=test&ecm_entity='.((int) $ecmrepairentity).'&selectlang='.urlencode($setuplang), true, 303);
+			exit;
+		}
 	}
 }
 
@@ -1580,7 +1624,9 @@ if ($ok && GETPOST('force_utf8_on_tables', 'alpha')) {
 			}
 			print '</td></tr>';
 			flush();
-			ob_flush();
+			if (ob_get_level() > 0) {
+				ob_flush();
+			}
 		}
 
 		// Restore dropped foreign keys
@@ -1605,7 +1651,9 @@ if ($ok && GETPOST('force_utf8_on_tables', 'alpha')) {
 				fclose($handle);
 			}
 			flush();
-			ob_flush();
+			if (ob_get_level() > 0) {
+				ob_flush();
+			}
 		}
 
 		// Enable foreign key checking
@@ -1710,7 +1758,9 @@ if ($ok && GETPOST('force_utf8mb4_on_tables', 'alpha')) {
 			}
 			print '</td></tr>';
 			flush();
-			ob_flush();
+			if (ob_get_level() > 0) {
+				ob_flush();
+			}
 		}
 
 		// Restore dropped foreign keys
@@ -1735,7 +1785,9 @@ if ($ok && GETPOST('force_utf8mb4_on_tables', 'alpha')) {
 				fclose($handle);
 			}
 			flush();
-			ob_flush();
+			if (ob_get_level() > 0) {
+				ob_flush();
+			}
 		}
 
 		// Enable foreign key checking
@@ -1777,8 +1829,8 @@ if ($ok && GETPOST('force_collation_from_conf_on_tables', 'alpha')) {
 
 			print '<tr><td colspan="2">';
 			print $table[0];
-			$sql1 = "ALTER TABLE ".$table[0]." ROW_FORMAT=dynamic";
-			$sql2 = "ALTER TABLE ".$table[0]." CONVERT TO CHARACTER SET ".$conf->db->character_set." COLLATE ".$conf->db->dolibarr_main_db_collation;
+			$sql1 = "ALTER TABLE ".$table[0]." ROW_FORMAT=dynamic"; // @phan-suppress-current-line SqlInjection
+			$sql2 = "ALTER TABLE ".$table[0]." CONVERT TO CHARACTER SET ".$conf->db->character_set." COLLATE ".$conf->db->dolibarr_main_db_collation; // @phan-suppress-current-line SqlInjection
 			print '<!-- '.$sql1.' -->';
 			print '<!-- '.$sql2.' -->';
 			if ($force_collation_from_conf_on_tables == 'confirmed') {
@@ -1941,7 +1993,9 @@ if ($ok && GETPOST('repair_link_dispatch_lines_supplier_order_lines')) {
 			if (!($n_processed_rows & 0xff)) {
 				echo '<tr><td>Processed '.$n_processed_rows.' rows with '.count($errors).' errors…'."</td></tr>\n";
 				flush();
-				ob_flush();
+				if (ob_get_level() > 0) {
+					ob_flush();
+				}
 			}
 		}
 	} else {
@@ -1974,7 +2028,9 @@ if ($ok && GETPOST('repair_supplier_order_duplicate_ref')) {
 
 	// Query to find all duplicate supplier orders
 	$sql = "SELECT * FROM " . MAIN_DB_PREFIX . "commande_fournisseur";
-	$sql .= " WHERE ref IN (SELECT cf.ref FROM " . MAIN_DB_PREFIX . "commande_fournisseur cf GROUP BY cf.ref, cf.entity HAVING COUNT(cf.rowid) > 1)";
+	$sql .= " WHERE entity = ".((int) $conf->entity);
+	$sql .= " AND ref IN (SELECT cf.ref FROM " . MAIN_DB_PREFIX . "commande_fournisseur cf WHERE cf.entity = ".((int) $conf->entity)." GROUP BY cf.ref HAVING COUNT(cf.rowid) > 1)";
+	$sql .= " ORDER BY rowid";
 
 	// Build a list of ref => []CommandeFournisseur
 	$duplicateSupplierOrders = [];
@@ -2001,6 +2057,7 @@ if ($ok && GETPOST('repair_supplier_order_duplicate_ref')) {
 			$newRef = $supplierOrder->getNextNumRef($soc);
 
 			$sql = "UPDATE " . MAIN_DB_PREFIX . "commande_fournisseur cf SET cf.ref = '" . $db->escape($newRef) . "' WHERE cf.rowid = " . (int) $supplierOrder->id;
+			$sql .= " AND cf.entity = ".((int) $conf->entity);
 			if (!$db->query($sql)) {
 				$err++;
 			}
@@ -2049,13 +2106,13 @@ if ($ok && GETPOST('recalculateinvoicetotal') == 'confirmed') {
 					FROM
 						".MAIN_DB_PREFIX."facturedet fd
 					WHERE
-						fd.fk_facture = $obj->rowid";
+						fd.fk_facture = ".((int) $obj->rowid);
 				$ressql_calculs = $db->query($sql_calculs);
 				while ($obj_calcul = $db->fetch_object($ressql_calculs)) {
-					// Calcul de la somme des paiements reçus
-					$sql_paiements = "SELECT SUM(amount) as somme from ".MAIN_DB_PREFIX."paiement_facture WHERE fk_facture = $obj->rowid";
+					// Calculate the sum of received payments
+					$sql_paiements = "SELECT SUM(amount) as somme from ".MAIN_DB_PREFIX."paiement_facture WHERE fk_facture = ".((int) $obj->rowid);
 					$montantPaiements = $db->fetch_object($db->query($sql_paiements))->somme;
-					$totHt= ($obj_calcul->total_ht ? price2num($obj_calcul->total_ht, 'MT') : 0);
+					$totHt = ($obj_calcul->total_ht ? price2num($obj_calcul->total_ht, 'MT') : 0);
 					$totTva = ($obj_calcul->total_tva ? price2num($obj_calcul->total_tva, 'MT') : 0);
 					$totLocal1 = ($obj_calcul->localtax1 ? price2num($obj_calcul->localtax1, 'MT') : 0);
 					$totLocal2 = ($obj_calcul->localtax2 ? price2num($obj_calcul->localtax2, 'MT') : 0);
@@ -2063,15 +2120,15 @@ if ($ok && GETPOST('recalculateinvoicetotal') == 'confirmed') {
 					$sql_maj = "
 						UPDATE ".MAIN_DB_PREFIX."facture
 						SET
-							total_ht = $totHt,
-							total_tva = $totTva,
-							localtax1 = $totLocal1,
-							localtax2 = $totLocal2,
-							total_ttc = $totTtc,
-							fk_statut = ".($totTtc == price2num($montantPaiements, 'MT') ? 2 : 1 ).",
-							paid = ".($totTtc == price2num($montantPaiements, 'MT') ? 1 : 0 )."
+							total_ht = ".((float) $totHt).",
+							total_tva = ".((float) $totTva).",
+							localtax1 = ".((float) $totLocal1).",
+							localtax2 = ".((float) $totLocal2).",
+							total_ttc = ".((float) $totTtc).",
+							fk_statut = ".($totTtc == price2num($montantPaiements, 'MT') ? 2 : 1).",
+							paid = ".($totTtc == price2num($montantPaiements, 'MT') ? 1 : 0)."
 						WHERE
-							rowid = $obj->rowid";
+							rowid = ".((int) $obj->rowid);
 					$db->query($sql_maj);
 				}
 				$i++;
@@ -2134,7 +2191,7 @@ if ($ok && GETPOST('repair_mailing_path')) {
 							while (($thumb = readdir($thumbs)) !== false) {
 								$res = dol_move($origin.'/'.$file.'/'.$thumb, $destin.'/'.$file.'/'.$thumb);
 								$msg = ($res ? '  * Migration successful' : 'Migration failed') . ' for file '.$origin.'/'.$file.'.<br>';
-								print ($msg);
+								print($msg);
 							}
 							// dol_delete_dir($origin.'/'.$file);
 						}
@@ -2142,7 +2199,7 @@ if ($ok && GETPOST('repair_mailing_path')) {
 						if (dol_is_file($origin.'/'.$file)) {
 							$res = dol_move($origin.'/'.$file, $destin.'/'.$file);
 							$msg = ($res ? '  * Migration successful' : 'Migration failed') . ' for file '.$origin.'/'.$file.'.<br>';
-							print ($msg);
+							print($msg);
 						}
 					}
 				}

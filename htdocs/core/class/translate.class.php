@@ -2,7 +2,7 @@
 /* Copyright (C) 2001       Eric Seigne         <erics@rycks.com>
  * Copyright (C) 2004-2015  Destailleur Laurent <eldy@users.sourceforge.net>
  * Copyright (C) 2005-2010  Regis Houssin       <regis.houssin@inodbox.com>
- * Copyright (C) 2024-2025	MDW					<mdeweerd@users.noreply.github.com>
+ * Copyright (C) 2024-2026	MDW					<mdeweerd@users.noreply.github.com>
  * Copyright (C) 2024-2026  Frédéric France     <frederic.france@free.fr>
  *
  * This program is free software; you can redistribute it and/or modify
@@ -411,7 +411,7 @@ class Translate
 			if ($langofdir == 'ar_AR') {
 				$langofdir = 'ar_SA'; // main parent for ar_EG is not 'ar_AR' but 'ar_SA'
 			}
-			$this->load($domain, $alt + 1, $stopafterdirection, $langofdir, 0, 0, $tabtranslatedomain, $langkey);
+			$this->load($domain, $alt + 1, $stopafterdirection, $langofdir, 0, $forceloadifalreadynotfound, $tabtranslatedomain, $langkey);
 		}
 
 		// Now we complete with reference file (en_US)
@@ -419,7 +419,7 @@ class Translate
 			// This function MUST NOT contains call to syslog
 			//dol_syslog("Translate::Load loading alternate translation file (to complete ".$this->defaultlang."/".$newdomain.".lang file)", LOG_DEBUG);
 			$langofdir = 'en_US';
-			$this->load($domain, $alt + 1, $stopafterdirection, $langofdir, 0, 0, $tabtranslatedomain, $langkey);
+			$this->load($domain, $alt + 1, $stopafterdirection, $langofdir, 0, $forceloadifalreadynotfound, $tabtranslatedomain, $langkey);
 		}
 
 		// We are in the pass of the reference file. No more files to scan to complete.
@@ -517,7 +517,9 @@ class Translate
 		$usecachekey = '';
 		// Using a memcached server
 		if (isModEnabled('memcached') && getDolGlobalString('MEMCACHED_SERVER')) {
-			$usecachekey = $newdomain . '_' . $langofdir; // Should not contains special chars
+			// The SQL below is filtered with getEntity(), so the cached result is entity dependent and the key must be too,
+			// otherwise entities with different overwrite translations share one cache entry (memcached is shared by all entities).
+			$usecachekey = $newdomain . '_' . $langofdir . '_' . str_replace(',', '-', getEntity('overwrite_trans')); // Should not contains special chars
 		} elseif (getDolGlobalInt('MAIN_OPTIMIZE_SPEED') & 0x02) {
 			// Using cache with shmop. Speed gain: 40ms - Memory overusage: 200ko (Size of session cache file)
 			$usecachekey = $newdomain;
@@ -558,7 +560,7 @@ class Translate
 						//print "Domain=$domain, found a string for $tab[0] with value $tab[1]<br>";
 						if (empty($this->tab_translate[$key])) {    // If translation was already found, we must not continue, even if MAIN_FORCELANGDIR is set (MAIN_FORCELANGDIR is to replace lang dir, not to overwrite entries)
 							// Convert some strings: Parse and render carriage returns. Also, change '\\s' int '\s' because transifex sync pull the string '\s' into string '\\s'
-							$this->tab_translate[$key] = str_replace(array('\\n', '\\\\s'), array("\n", '\s'), $value);
+							$this->tab_translate[$key] = (string) str_replace(array('\\n', '\\\\s'), array("\n", '\s'), $value);
 
 							if ($usecachekey) {
 								$tabtranslatedomain[$key] = $value; // To save lang content in cache
@@ -976,7 +978,7 @@ class Translate
 	public function file_exists($filename, $searchalt = 0)
 	{
 		// phpcs:enable
-		// Test si fichier dans repertoire de la langue
+		// Test if file is in the language directory
 		foreach ($this->dir as $searchdir) {
 			if (is_readable(dol_osencode($searchdir . "/langs/" . $this->defaultlang . "/" . $filename))) {
 				return true;
@@ -1081,9 +1083,9 @@ class Translate
 		}
 
 		// Not found in loaded language file nor in cache. So we will take the label into database.
-		$sql = "SELECT " . $fieldlabel . " as label";
+		$sql = "SELECT " . $db->sanitize($fieldlabel) . " as label";
 		$sql .= " FROM " . $db->prefix() . $tablename;
-		$sql .= " WHERE " . $fieldkey . " = '" . $db->escape($keyforselect ? $keyforselect : $key) . "'";
+		$sql .= " WHERE " . $db->sanitize($fieldkey) . " = '" . $db->escape($keyforselect ? $keyforselect : $key) . "'";
 		if ($filteronentity) {
 			$sql .= " AND entity IN (" . getEntity($tablename) . ')';
 		}

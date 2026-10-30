@@ -39,18 +39,17 @@ if (!defined('NOIPCHECK')) {
 
 // Load Dolibarr environment
 require '../../main.inc.php';
-require_once DOL_DOCUMENT_ROOT."/core/lib/admin.lib.php";
-require_once DOL_DOCUMENT_ROOT."/core/lib/files.lib.php";
-require_once DOL_DOCUMENT_ROOT."/opensurvey/class/opensurveysondage.class.php";
-require_once DOL_DOCUMENT_ROOT."/opensurvey/lib/opensurvey.lib.php";
-require_once DOL_DOCUMENT_ROOT.'/core/lib/date.lib.php';
-
 /**
  * @var Conf $conf
  * @var DoliDB $db
  * @var Societe $mysoc
  * @var Translate $langs
  */
+require_once DOL_DOCUMENT_ROOT."/core/lib/admin.lib.php";
+require_once DOL_DOCUMENT_ROOT."/core/lib/files.lib.php";
+require_once DOL_DOCUMENT_ROOT."/opensurvey/class/opensurveysondage.class.php";
+require_once DOL_DOCUMENT_ROOT."/opensurvey/lib/opensurvey.lib.php";
+require_once DOL_DOCUMENT_ROOT.'/core/lib/date.lib.php';
 
 // Init vars
 $action = GETPOST('action', 'aZ09');
@@ -79,13 +78,15 @@ if (!isModEnabled('opensurvey')) {
 
 $nbcolonnes = substr_count($object->sujet, ',') + 1;
 
-$listofvoters = explode(',', $_SESSION["savevoter"]);
+$listofvoters = explode(',', $_SESSION["savevoter"] ?? '');
 
 $error = 0;
 
 // Add comment
 if (GETPOST('ajoutcomment', 'alpha')) {
-	if (!$canbemodified) {
+	if (!$canbemodified || empty($object->allow_comments)) {
+		// Comments are refused when the survey is expired/closed or when the survey does not allow comments
+		// (the comment form is hidden in that case, so a comment here can only come from a forged POST).
 		httponly_accessforbidden('ErrorForbidden');
 	}
 
@@ -149,7 +150,7 @@ if (GETPOST("boutonp") || GETPOST("boutonp.x") || GETPOST("boutonp_x")) {		// bo
 		httponly_accessforbidden('ErrorForbidden');
 	}
 
-	//Si le nom est bien entré
+	// If the name is entered correctly
 	if (GETPOST('nom', 'alphanohtml')) {
 		$nouveauchoix = '';
 		for ($i = 0; $i < $nbcolonnes; $i++) {
@@ -285,10 +286,21 @@ if ($testmodifier) {
 		httponly_accessforbidden('ErrorForbidden');
 	}
 
-	$idtomodify = GETPOST("idtomodify".$modifier);
+	// The vote must be a vote of this survey and of a voter of this session, as the interface only offers to save the votes of the voter
+	$idtomodify = GETPOSTINT("idtomodify".$modifier);
+	$sql = "SELECT nom FROM ".MAIN_DB_PREFIX."opensurvey_user_studs";
+	$sql .= " WHERE id_users = ".((int) $idtomodify);
+	$sql .= " AND id_sondage = '".$db->escape($object->id_sondage)."'";
+	$resql = $db->query($sql);
+	$objvote = ($resql ? $db->fetch_object($resql) : null);
+	if (!$objvote || !in_array($objvote->nom, $listofvoters)) {
+		httponly_accessforbidden('ErrorForbidden');
+	}
+
 	$sql = 'UPDATE '.MAIN_DB_PREFIX."opensurvey_user_studs";
 	$sql .= " SET reponses = '".$db->escape($nouveauchoix)."'";
-	$sql .= " WHERE id_users = '".$db->escape($idtomodify)."'";
+	$sql .= " WHERE id_users = ".((int) $idtomodify);
+	$sql .= " AND id_sondage = '".$db->escape($object->id_sondage)."'";
 
 	$resql = $db->query($sql);
 	if (!$resql) {
@@ -300,6 +312,18 @@ if ($testmodifier) {
 $idcomment = GETPOSTINT('deletecomment');
 if ($idcomment) {
 	if (!$canbemodified) {
+		httponly_accessforbidden('ErrorForbidden');
+	}
+
+	// Only the author of a comment (a voter of this session) can delete it, as the interface only shows the link to him
+	$commentofvoter = false;
+	foreach ($object->getComments() as $commentline) {
+		if ($commentline->id_comment == $idcomment && in_array($commentline->usercomment, $listofvoters)) {
+			$commentofvoter = true;
+			break;
+		}
+	}
+	if (!$commentofvoter) {
 		httponly_accessforbidden('ErrorForbidden');
 	}
 
@@ -341,12 +365,14 @@ $toutsujet = str_replace("°", "'", $toutsujet);
 
 print '<div class="survey_intro">';
 print '<div class="survey_invitation">'.$langs->trans("YouAreInivitedToVote").'</div>';
+print '<div class="small">';
 print '<span class="opacitymedium">'.$langs->trans("OpenSurveyHowTo").'</span><br>';
 if (empty($object->allow_spy)) {
 	print '<span class="opacitymedium">'.$langs->trans("YourVoteIsPrivate").'</span><br>';
 } else {
 	print $form->textwithpicto('<span class="opacitymedium">'.$langs->trans("YourVoteIsPublic").'</span>', $langs->trans("CanSeeOthersVote")).'<br>';
 }
+print '</div>';
 print '</div>';
 print '<br>';
 
@@ -373,7 +399,7 @@ print '</div>'."\n";
 
 //The survey has expired, users can't vote or do any action
 if (!$canbemodified) {
-	print '<br><center><div class="quatrevingtpercent center warning">'.$langs->trans('SurveyExpiredInfo').'</div></center>';
+	print '<br><center><div class="center warning">'.$langs->trans('SurveyExpiredInfo').'</div></center>';
 	llxFooterSurvey();
 
 	$db->close();
@@ -412,8 +438,7 @@ if ($object->format == "D") {
 	//display of months
 	$colspan = 1;
 	for ($i = 0; $i < $nbofsujet; $i++) {
-		$cur = intval($toutsujet[$i]); // intval() est utiliser pour supprimer le suffixe @* qui déplaît logiquement à strftime()
-
+		$cur = intval($toutsujet[$i]);  // intval() is used to remove the @* suffix which logically belongs to strftime()
 		if (!isset($toutsujet[$i + 1])) {
 			$next = false;
 		} else {

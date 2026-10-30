@@ -2,10 +2,11 @@
 /* Copyright (C) 2012		Regis Houssin				<regis.houssin@inodbox.com>
  * Copyright (C) 2012		Cédric Salvador				<csalvador@gpcsolutions.fr>
  * Copyright (C) 2012-2014	Raphaël Doursenaud			<rdoursenaud@gpcsolutions.fr>
- * Copyright (C) 2023		Nick Fragoulis
- * Copyright (C) 2024-2025  Frédéric France             <frederic.france@free.fr>
- * Copyright (C) 2024-2025	MDW							<mdeweerd@users.noreply.github.com>
+ * Copyright (C) 2023-2026  Nick Fragoulis
+ * Copyright (C) 2024-2026  Frédéric France             <frederic.france@free.fr>
+ * Copyright (C) 2024-2026	MDW							<mdeweerd@users.noreply.github.com>
  * Copyright (C) 2024-2026	Alexandre Spangaro			<alexandre@inovea-conseil.com>
+ * Copyright (C) 2026		Joachim Kueter				<git-jk@bloxera.com>
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -79,6 +80,11 @@ abstract class CommonInvoice extends CommonObject
 	 * @var int Deadline for payment
 	 */
 	public $date_lim_reglement;
+
+	/**
+	 * @var ?int	Point of tax date (date of supply)
+	 */
+	public $date_pointoftax;
 
 	/**
 	 * @var ?int		Payment term ID
@@ -201,6 +207,11 @@ abstract class CommonInvoice extends CommonObject
 	 * @var int Situation cycle reference number
 	 */
 	public $situation_cycle_ref;
+
+	/**
+	 * @var int 		Populated by setRetainedWarrantyPaymentTerms()
+	 */
+	public $retained_warranty_fk_cond_reglement;
 
 	/**
 	 * ! Closing after partial payment: CLOSECODE_DISCOUNTVAT, CLOSECODE_BADDEBT, CLOSECODE_BANKCHARGE, CLOSECODE_OTHER
@@ -345,7 +356,7 @@ abstract class CommonInvoice extends CommonObject
 
 		$sql = "SELECT sum(amount) as amount, sum(multicurrency_amount) as multicurrency_amount";
 		$sql .= " FROM ".$this->db->prefix().$table;
-		$sql .= " WHERE ".$field." = ".((int) $this->id);
+		$sql .= " WHERE ".$this->db->sanitize($field)." = ".((int) $this->id);
 
 		dol_syslog(get_class($this)."::getSommePaiement", LOG_DEBUG);
 
@@ -578,14 +589,86 @@ abstract class CommonInvoice extends CommonObject
 	}
 
 	/**
+	 *  Change the retained warranty payments terms
+	 *
+	 *  @param		int		$id		Id of new payment terms
+	 *  @return		int				>0 if OK, <0 if KO
+	 */
+	public function setRetainedWarrantyPaymentTerms($id)
+	{
+		dol_syslog(get_class($this).'::setRetainedWarrantyPaymentTerms('.$id.')');
+		if ($this->status >= 0 || $this->element == 'societe') {
+			$fieldname = 'retained_warranty_fk_cond_reglement';
+
+			$sql = 'UPDATE '.$this->db->prefix().$this->table_element;
+			$sql .= " SET ".$this->db->sanitize($fieldname)." = ".((int) $id);
+			$sql .= ' WHERE rowid='.((int) $this->id);
+
+			if ($this->db->query($sql)) {
+				$this->retained_warranty_fk_cond_reglement = $id;
+				return 1;
+			} else {
+				dol_syslog(get_class($this).'::setRetainedWarrantyPaymentTerms Error '.$sql.' - '.$this->db->error());
+				$this->error = $this->db->error();
+				return -1;
+			}
+		} else {
+			dol_syslog(get_class($this).'::setRetainedWarrantyPaymentTerms, status of the object is incompatible');
+			$this->error = 'Status of the object is incompatible '.$this->status;
+			return -2;
+		}
+	}
+
+	/**
+	 *  Check that the point of tax date of a validated invoice is not changed by an update.
+	 *  Once validated, the invoice is issued and its point of tax date decides the VAT period.
+	 *  To correct it, the invoice must be set back to draft, or a credit note must be created.
+	 *  The status is read from the database, the one of the object may have been changed (for example by the API).
+	 *
+	 *  @return	int		1 if not changed or invoice is a draft, -1 if changed on a validated invoice or error
+	 */
+	protected function checkPointOfTaxNotChanged()
+	{
+		global $langs;
+
+		if (empty($this->id)) {
+			return 1;
+		}
+
+		$sql = "SELECT fk_statut, date_pointoftax FROM ".$this->db->prefix().$this->table_element;
+		$sql .= " WHERE rowid = ".((int) $this->id);
+		$resql = $this->db->query($sql);
+		if (!$resql) {
+			$this->error = $this->db->lasterror();
+			return -1;
+		}
+		$obj = $this->db->fetch_object($resql);
+		$this->db->free($resql);
+		if (!$obj || (int) $obj->fk_statut == self::STATUS_DRAFT) {
+			return 1;
+		}
+
+		// Compare the days, as stored by update()
+		$olddate = substr((string) $obj->date_pointoftax, 0, 10);
+		$newdate = (dol_strlen((string) $this->date_pointoftax) != 0 ? substr($this->db->idate((int) $this->date_pointoftax), 0, 10) : '');
+		if ($olddate !== $newdate) {
+			$langs->load("bills");
+			$this->error = $langs->trans("ErrorPointOfTaxOfValidatedInvoiceCantBeChanged", $this->ref);
+			return -1;
+		}
+
+		return 1;
+	}
+
+	/**
 	 *  Return list of payments
 	 *
 	 *  @see $error Empty string '' if no error.
 	 *
 	 *	@param		string	$filtertype			1 to filter on type of payment == 'PRE' for the payment lines
 	 *  @param      int     $multicurrency  	Return multicurrency_amount instead of amount
-	 *  @param		int		$mode				0=payments + discount, 1=payments only
-	 *  @return     array<array{amount:int|float,date:int,num:string,ref:string,ref_ext?:string,fk_bank_line?:int,type:string}>		 Array with list of payments
+	 *  @param		int		$mode				0=payments + discount, 1=payments only, 2=discounts only
+	 *  @return     array<array{amount:int|float,date:string,num:string,ref:string,ref_ext?:string,fk_bank_line?:int,type:string,typeline:'payment'|'discount'}>		 Array with list of payments (date is the raw date returned by the database)
 	 */
 	public function getListOfPayments($filtertype = '', $multicurrency = 0, $mode = 0)
 	{
@@ -594,26 +677,31 @@ abstract class CommonInvoice extends CommonObject
 
 		$table = 'paiement_facture';
 		$table2 = 'paiement';
+
 		$field = 'fk_facture';
 		$field2 = 'fk_paiement';
-		$field3 = ', p.ref_ext';
-		$field4 = ', p.fk_bank'; // Bank line id
+		$field3 = 'p.ref_ext';
+		$field4 = 'p.fk_bank'; // Bank line id
+
 		$sharedentity = 'facture';
+
 		if ($this->element == 'facture_fourn' || $this->element == 'invoice_supplier') {
 			$table = 'paiementfourn_facturefourn';
 			$table2 = 'paiementfourn';
+
 			$field = 'fk_facturefourn';
 			$field2 = 'fk_paiementfourn';
 			$field3 = '';
+
 			$sharedentity = 'facture_fourn';
 		}
 
 		// List of payments
 		if (empty($mode) || $mode == 1) {
-			$sql = "SELECT p.ref, pf.amount, pf.multicurrency_amount, p.fk_paiement, p.datep, p.num_paiement as num, t.code".$field3 . $field4;
+			$sql = "SELECT p.ref, pf.amount, pf.multicurrency_amount, p.fk_paiement, p.datep, p.num_paiement as num, t.code".($field3 ? ", ".$this->db->sanitize($field3) : "") . (", ".$this->db->sanitize($field4));
 			$sql .= " FROM ".$this->db->prefix().$table." as pf, ".$this->db->prefix().$table2." as p, ".$this->db->prefix()."c_paiement as t";
-			$sql .= " WHERE pf.".$field." = ".((int) $this->id);
-			$sql .= " AND pf.".$field2." = p.rowid";
+			$sql .= " WHERE pf.".$this->db->sanitize($field)." = ".((int) $this->id);
+			$sql .= " AND pf.".$this->db->sanitize($field2)." = p.rowid";
 			$sql .= ' AND p.fk_paiement = t.id';
 			$sql .= ' AND p.entity IN ('.getEntity($sharedentity).')';
 			if ($filtertype) {
@@ -699,9 +787,7 @@ abstract class CommonInvoice extends CommonObject
 	 *  Return if an invoice can be set back to draft.
 	 *	Rule is:
 	 *  If invoice is draft and has a temporary ref -> yes (1)
-	 *  If hidden option INVOICE_CAN_NEVER_BE_REMOVED is 1 -> no (0)
 	 *  If invoice is transferred in bookkeeping -> no (-1)
-	 *  If invoice has a definitive ref, is not last in ref -> no (-2)
 	 *  If invoice has a definitive ref, is not last in a situation cycle -> no (-3)
 	 *  If there is one payment -> no (-4)
 	 *  If already sent by email -> no (-5)
@@ -713,9 +799,97 @@ abstract class CommonInvoice extends CommonObject
 	 */
 	public function isEditable()
 	{
-		$test = $this->is_erasable();
+		// phpcs:enable
+		global $hookmanager, $action;
 
-		return $test;
+		// We check if invoice is a temporary number (PROVxxxx)
+		$tmppart = substr($this->ref, 1, 4);
+
+		if ($this->status == self::STATUS_DRAFT && $tmppart === 'PROV') { // If draft invoice and ref not yet defined
+			return 1;
+		}
+
+		/*
+		if (getDolGlobalInt('INVOICE_CAN_NEVER_BE_REMOVED')) {
+			return 0;
+		}
+		*/
+
+		// If not a draft invoice and not temporary invoice
+		if ($tmppart !== 'PROV') {
+			if ($this instanceof Facture) {
+				/* @var Facture $this */
+				// If sent by email, we refuse
+				if ((int) $this->email_sent_counter > 0) {
+					return -5;
+				}
+
+				// If printed, we refuse
+				if ((int) $this->pos_print_counter > 0) {
+					return -6;
+				}
+
+				include_once DOL_DOCUMENT_ROOT.'/blockedlog/lib/blockedlog.lib.php';
+				if (isALNERunningVersion() && !empty($this->module_source)) {
+					$this->error = 'Action to modify an invoice from an external module like the Point Of Sale is not allowed';
+					return -7;
+					// Note, edit status to draft is also blocked by the trigger of blockedlog module for action BILL_UNVALIDATE that do a test on isEditable().
+				}
+			}
+
+			// If in accountancy, we refuse
+			$ventilExportCompta = $this->getVentilExportCompta();
+			if ($ventilExportCompta != 0) {
+				return -1;
+			}
+
+			// Get last number of validated invoice
+			if ($this->element != 'invoice_supplier') {
+				/*
+				if (empty($this->thirdparty)) {
+					$this->fetch_thirdparty(); // We need to have this->thirdparty defined, in case of the numbering rule uses tags that depend on thirdparty (like {t} tag).
+				}
+				$maxref = $this->getNextNumRef($this->thirdparty, 'last');
+				// $maxref can be '' (means not found) if there is no invoice yet, but also if there is no invoice for the new period when there is a reset at each period
+
+				// If invoice to delete is not the last one, we refuse
+				if ($maxref != '' && $maxref != $this->ref) {
+					return -2;
+				}
+				*/
+
+				// TODO If there is payment in bookkeeping, check the payment is not dispatched in accounting and return -2.
+				// ...
+
+				// If invoice is situation type, we refuse if it is not the last in situation cycle
+				if (!getDolGlobalString('INVOICE_SITUATION_CAN_BE_REMOVED_EVEN_IF_NOT_LAST') && $this->situation_cycle_ref && method_exists($this, 'is_last_in_cycle')) {
+					$last = $this->is_last_in_cycle();
+					if (!$last) {
+						return -3;
+					}
+				}
+			}
+
+			// Test if there is at least one payment. If yes, we refuse.
+			if ($this->getSommePaiement() > 0) {
+				return -4;
+			}
+
+			$parameters = array();
+			$reshook = $hookmanager->executeHooks('isEditable', $parameters, $this, $action);
+			if (!empty($hookmanager->resArray['result'])) {
+				$this->error = $hookmanager->resArray['error'];
+				if (!empty($hookmanager->resArray['errors'])) {
+					$this->errors = array_merge($this->errors, $hookmanager->resArray['errors']);
+				}
+				if (!in_array($this->error, $this->errors)) {
+					$this->errors[] = $this->error;
+				}
+				return $hookmanager->resArray['result'];
+			}
+		}
+
+		return 2;
 	}
 
 	/**
@@ -757,19 +931,19 @@ abstract class CommonInvoice extends CommonObject
 
 			include_once DOL_DOCUMENT_ROOT.'/blockedlog/lib/blockedlog.lib.php';
 			if (isALNERunningVersion()) {
-				$this->error = 'Action not allowed on the certified version';
+				$this->error = 'Action not allowed on a certified version (or candidate for certification)';
 				return -7;
 			}
 
 			$parameters = array();
-			$reshook = $hookmanager->executeHooks('isEditable', $parameters, $this, $action);
+			$reshook = $hookmanager->executeHooks('isReplacable', $parameters, $this, $action);
 			if (!empty($hookmanager->resArray['result'])) {
 				$this->error = $hookmanager->resArray['error'];
-				if (!in_array($this->error, $this->errors)) {
-					$this->errors[] = $this->error;
-				}
 				if (!empty($hookmanager->resArray['errors'])) {
 					$this->errors = array_merge($this->errors, $hookmanager->resArray['errors']);
+				}
+				if (!in_array($this->error, $this->errors)) {
+					$this->errors[] = $this->error;
 				}
 				return $hookmanager->resArray['result'];
 			}
@@ -816,7 +990,7 @@ abstract class CommonInvoice extends CommonObject
 
 		// If not a draft invoice and not temporary invoice
 		if ($tmppart !== 'PROV') {
-			if ($this instanceOf Facture) {
+			if ($this instanceof Facture) {
 				/* @var Facture $this */
 				// If sent by email, we refuse
 				if ((int) $this->email_sent_counter > 0) {
@@ -830,7 +1004,7 @@ abstract class CommonInvoice extends CommonObject
 
 				include_once DOL_DOCUMENT_ROOT.'/blockedlog/lib/blockedlog.lib.php';
 				if (isALNERunningVersion()) {
-					$this->error = 'Action not allowed on the certified version';
+					$this->error = 'Action not allowed on the certified version (or candidate for certification)';
 					return -7;
 				}
 			}
@@ -866,20 +1040,20 @@ abstract class CommonInvoice extends CommonObject
 				}
 			}
 
-			// Test if there is at least one payment. If yes, we refuse to delete.
+			// Test if there is at least one payment. If yes, we refuse.
 			if ($this->getSommePaiement() > 0) {
 				return -4;
 			}
 
 			$parameters = array();
-			$reshook = $hookmanager->executeHooks('isEditable', $parameters, $this, $action);
+			$reshook = $hookmanager->executeHooks('isErasable', $parameters, $this, $action);
 			if (!empty($hookmanager->resArray['result'])) {
 				$this->error = $hookmanager->resArray['error'];
-				if (!in_array($this->error, $this->errors)) {
-					$this->errors[] = $this->error;
-				}
 				if (!empty($hookmanager->resArray['errors'])) {
 					$this->errors = array_merge($this->errors, $hookmanager->resArray['errors']);
+				}
+				if (!in_array($this->error, $this->errors)) {
+					$this->errors[] = $this->error;
 				}
 				return $hookmanager->resArray['result'];
 			}
@@ -897,6 +1071,10 @@ abstract class CommonInvoice extends CommonObject
 	 */
 	public function getVentilExportCompta($mode = 0)
 	{
+		if (!isModEnabled('accounting')) {
+			return 0;
+		}
+
 		$alreadydispatched = 0;
 
 		$type = 'customer_invoice';
@@ -1163,7 +1341,7 @@ abstract class CommonInvoice extends CommonObject
 			'paye'        => $paye,
 			'alreadypaid' => $alreadypaid,
 			'type'        => $type,
-			'paramsBadge'=>& $paramsBadge
+			'paramsBadge' => & $paramsBadge
 		);
 
 		$reshook = $hookmanager->executeHooks('LibStatut', $parameters, $this); // Note that $action and $object may have been modified by hook
@@ -1259,14 +1437,20 @@ abstract class CommonInvoice extends CommonObject
 
 		/* Define date limit */
 
+		include_once DOL_DOCUMENT_ROOT.'/core/lib/date.lib.php';
+
+		// Note: $this->date is midnight in the server timezone, so the delay must be added as calendar days and not as
+		// a number of seconds. A day is not always 24 hours long: when the delay crosses a daylight saving time change,
+		// adding 86400 seconds per day shifts the result by one hour and can move it to the previous day.
+
 		// 0 : adding the number of days
 		if ($cdr_type == 0) {
-			$datelim = $this->date + ($cdr_nbjour * 3600 * 24);
+			$datelim = dol_time_plus_duree($this->date, $cdr_nbjour, 'd', 0, 'tzserver');
 
-			$datelim += ($cdr_decalage * 3600 * 24);
+			$datelim = dol_time_plus_duree($datelim, $cdr_decalage, 'd', 0, 'tzserver');
 		} elseif ($cdr_type == 1) {
 			// 1 : application of the "end of the month" rule
-			$datelim = $this->date + ($cdr_nbjour * 3600 * 24);
+			$datelim = dol_time_plus_duree($this->date, $cdr_nbjour, 'd', 0, 'tzserver');
 
 			$mois = date('m', $datelim);
 			$annee = date('Y', $datelim);
@@ -1277,17 +1461,16 @@ abstract class CommonInvoice extends CommonObject
 				$mois += 1;
 			}
 			// We move at the beginning of the next month, and we take a day off
-			$datelim = dol_mktime(12, 0, 0, $mois, 1, $annee);
+			$datelim = dol_mktime(12, 0, 0, $mois, 1, $annee, 'gmt');
 			$datelim -= (3600 * 24);
 
 			$datelim += ($cdr_decalage * 3600 * 24);
 		} elseif ($cdr_type == 2 && !empty($cdr_decalage)) {
 			// 2 : application of the rule, the N of the current or next month
-			include_once DOL_DOCUMENT_ROOT.'/core/lib/date.lib.php';
-			$datelim = $this->date + ($cdr_nbjour * 3600 * 24);
+			$datelim = dol_time_plus_duree($this->date, $cdr_nbjour, 'd', 0, 'tzserver');
 
-			$date_piece = dol_mktime(0, 0, 0, (int) date('m', $datelim), (int) date('d', $datelim), (int) date('Y', $datelim)); // Sans les heures minutes et secondes
-			$date_lim_current = dol_mktime(0, 0, 0, (int) date('m', $datelim), (int) $cdr_decalage, (int) date('Y', $datelim)); // Sans les heures minutes et secondes
+			$date_piece = dol_mktime(0, 0, 0, (int) date('m', $datelim), (int) date('d', $datelim), (int) date('Y', $datelim), 'gmt'); // without hours, minutes and seconds
+			$date_lim_current = dol_mktime(0, 0, 0, (int) date('m', $datelim), (int) $cdr_decalage, (int) date('Y', $datelim), 'gmt'); // without hours, minutes and seconds
 			$date_lim_next = dol_time_plus_duree((int) $date_lim_current, 1, 'm'); // Add 1 month
 
 			$diff = $date_piece - $date_lim_current;
@@ -1348,7 +1531,7 @@ abstract class CommonInvoice extends CommonObject
 				$sql		.= " AND type	= 'ban'";	// To exclude record done for some online payments
 				$sql		.= " AND traite	= 0";		// Not yet in a transfer receipt
 				dol_syslog(get_class($this)."::demande_prelevement - get pending requests not yet in receipt", LOG_DEBUG);
-				$resql= $this->db->query($sql);
+				$resql = $this->db->query($sql);
 				if ($resql) {
 					$obj = $this->db->fetch_object($resql);
 					$total_already_requested += $obj ? (float) $obj->total_requested : 0;
@@ -1599,6 +1782,10 @@ abstract class CommonInvoice extends CommonObject
 					require_once DOL_DOCUMENT_ROOT.'/societe/class/companypaymentmode.class.php';
 					$companypaymentmode = new CompanyPaymentMode($this->db);	// table societe_rib
 					$companypaymentmode->fetch($bac->id);
+					$sepaSequenceType = strtoupper((string) $companypaymentmode->frstrecur);
+					if (!in_array($sepaSequenceType, array('FRST', 'RCUR', 'OOFF', 'FNAL'), true)) {
+						$sepaSequenceType = 'FRST';
+					}
 
 					$this->stripechargedone = 0;
 					$this->stripechargeerror = 0;
@@ -1643,7 +1830,7 @@ abstract class CommonInvoice extends CommonObject
 					if (!$error) {
 						if (empty($obj->fk_prelevement_bons)) {
 							// This creates a record into llx_prelevement_bons and updates link with llx_prelevement_demande
-							$nbinvoices = $bon->create('0', '0', 'real', 'ALL', 0, 0, $type, $did, $fk_bank_account);
+							$nbinvoices = $bon->create('0', '0', 'real', $sepaSequenceType, 0, 0, $type, $did, $fk_bank_account);
 							if ($nbinvoices <= 0) {
 								$error++;
 								$errorforinvoice++;
@@ -1703,6 +1890,7 @@ abstract class CommonInvoice extends CommonObject
 								dol_syslog("makeStripeSepaRequest Current Saved Stripe environment is ".$savstripearrayofkeysbyenv[$servicestatus]['publishable_key']);
 
 								$foundalternativestripeaccount = '';
+								$stripearrayofkeys = array();
 
 								// Force stripe to another value (by default this value is empty)
 								if (! empty($forcestripe)) {
@@ -2144,11 +2332,24 @@ abstract class CommonInvoice extends CommonObject
 			$lines[] = ""; //IBAN (required)
 		}
 
+		$structuredCommunication = '';
+		$remittanceInformation = $this->ref;
+		if (!empty($this->payment_reference)) {
+			// Structured payment reference stored on the invoice, see core/lib/paymentref.lib.php.
+			// Spaces are only a reading aid, the code must carry the compact form.
+			$structuredCommunication = str_replace(' ', '', $this->payment_reference);
+			$remittanceInformation = '';
+		} elseif (getDolGlobalString('INVOICE_PAYMENT_ENABLE_STRUCTURED_COMMUNICATION')) {
+			include_once DOL_DOCUMENT_ROOT.'/core/lib/functions_be.lib.php';
+			$structuredCommunication = dolBECalculateStructuredCommunication((string) $this->ref, $this->type);
+			$remittanceInformation = '';
+		}
+
 		// Add the amount and reference
 		$lines[] = 'EUR' . $amount_to_pay; // Amount (optional)
 		$lines[] = ''; // Purpose (optional)
-		$lines[] = ''; // Payment reference (optional)
-		$lines[] = $this->ref; // Remittance Information (optional)
+		$lines[] = $structuredCommunication; // Payment reference (optional)
+		$lines[] = $remittanceInformation; // Remittance Information (optional)
 
 		// Join the lines with newline characters and return the result
 		return implode("\n", $lines);
@@ -2233,13 +2434,13 @@ abstract class CommonInvoice extends CommonObject
 		$complementaryinfo = '';
 		/*
 		 Example: //S1/10/10201409/11/190512/20/1400.000-53/30/106017086/31/180508/32/7.7/40/2:10;0:30
-		 /10/ Numéro de facture – 10201409
-		 /11/ Date de facture – 12.05.2019
-		 /20/ Référence client – 1400.000-53
-		 /30/ Numéro IDE pour la TVA – CHE-106.017.086 TVA
-		 /31/ Date de la prestation pour la comptabilisation de la TVA – 08.05.2018
-		 /32/ Taux de TVA sur le montant total de la facture – 7.7%
-		 /40/ Conditions – 2% d’escompte à 10 jours, paiement net à 30 jours
+		 /10/ Invoice number -- 10201409
+		 /11/ Invoice date -- 12.05.2019
+		 /20/ Customer reference -- 1400.000-53
+		 /30/ VAT IDE number -- CHE-106.017.086 TVA
+		 /31/ Service date for VAT accounting -- 08.05.2018
+		 /32/ VAT rate on total invoice amount -- 7.7%
+		 /40/ Terms -- 2% discount at 10 days, net payment at 30 days
 		 */
 		$datestring = dol_print_date($this->date, '%y%m%d');
 		//$pricewithtaxstring = price($this->total_ttc, 0, $tmplang, 0, -1, 2);
@@ -2260,7 +2461,7 @@ abstract class CommonInvoice extends CommonObject
 		$s .= "SPC\n";
 		$s .= "0200\n";
 		$s .= "1\n";
-		// Info Seller ("Compte / Payable à")
+		// Info Seller ("Account / Payable to")
 		if ($this->fk_account > 0) {
 			// Bank BAN if country is LI or CH.  TODO Add a test to check than IBAN start with CH or LI
 			$bankaccount->fetch($this->fk_account);
@@ -2273,23 +2474,23 @@ abstract class CommonInvoice extends CommonObject
 			// TODO In a future, we may always use this address, and if name/address/zip/town/country differs from $mysoc, we can use the address of $mysoc into the final seller field ?
 			$s .= "S\n";
 			$s .= dol_trunc($bankaccount->owner_name, 70, 'right', 'UTF-8', 1)."\n";
-			$addresslinearray = explode("\n", $bankaccount->owner_address);
-			$s .= dol_trunc(empty($addresslinearray[1]) ? '' : $addresslinearray[1], 70, 'right', 'UTF-8', 1)."\n";		// address line 1
-			$s .= dol_trunc(empty($addresslinearray[2]) ? '' : $addresslinearray[2], 70, 'right', 'UTF-8', 1)."\n";		// address line 2
+			$addresslinearray = explode("\n", (string) $bankaccount->owner_address);
+			$s .= dol_trunc(empty($addresslinearray[0]) ? '' : $addresslinearray[0], 70, 'right', 'UTF-8', 1)."\n";		// address line 1
+			$s .= dol_trunc(empty($addresslinearray[1]) ? '' : $addresslinearray[1], 70, 'right', 'UTF-8', 1)."\n";		// address line 2
 			/*$s .= dol_trunc($mysoc->zip, 16, 'right', 'UTF-8', 1)."\n";
 			$s .= dol_trunc($mysoc->town, 35, 'right', 'UTF-8', 1)."\n";
 			$s .= dol_trunc($mysoc->country_code, 2, 'right', 'UTF-8', 1)."\n";*/
 		} else {
 			$s .= "S\n";
 			$s .= dol_trunc((string) $mysoc->name, 70, 'right', 'UTF-8', 1)."\n";
-			$addresslinearray = explode("\n", $mysoc->address);
-			$s .= dol_trunc(empty($addresslinearray[1]) ? '' : $addresslinearray[1], 70, 'right', 'UTF-8', 1)."\n";		// address line 1
-			$s .= dol_trunc(empty($addresslinearray[2]) ? '' : $addresslinearray[2], 70, 'right', 'UTF-8', 1)."\n";		// address line 2
+			$addresslinearray = explode("\n", (string) $mysoc->address);
+			$s .= dol_trunc(empty($addresslinearray[0]) ? '' : $addresslinearray[0], 70, 'right', 'UTF-8', 1)."\n";		// address line 1
+			$s .= dol_trunc(empty($addresslinearray[1]) ? '' : $addresslinearray[1], 70, 'right', 'UTF-8', 1)."\n";		// address line 2
 			$s .= dol_trunc($mysoc->zip, 16, 'right', 'UTF-8', 1)."\n";
 			$s .= dol_trunc($mysoc->town, 35, 'right', 'UTF-8', 1)."\n";
 			$s .= dol_trunc($mysoc->country_code, 2, 'right', 'UTF-8', 1)."\n";
 		}
-		// Final seller (Ultimate seller) ("Créancier final" = "En faveur de")
+		// Final seller (Ultimate seller) ("Final creditor" = "In favour of")
 		$s .= "\n";
 		$s .= "\n";
 		$s .= "\n";
@@ -2303,21 +2504,30 @@ abstract class CommonInvoice extends CommonObject
 		// Buyer
 		$s .= "S\n";
 		$s .= dol_trunc((string) $this->thirdparty->name, 70, 'right', 'UTF-8', 1)."\n";
-		$addresslinearray = explode("\n", $this->thirdparty->address);
-		$s .= dol_trunc(empty($addresslinearray[1]) ? '' : $addresslinearray[1], 70, 'right', 'UTF-8', 1)."\n";		// address line 1
-		$s .= dol_trunc(empty($addresslinearray[2]) ? '' : $addresslinearray[2], 70, 'right', 'UTF-8', 1)."\n";		// address line 2
+		$addresslinearray = explode("\n", (string) $this->thirdparty->address);
+		$s .= dol_trunc(empty($addresslinearray[0]) ? '' : $addresslinearray[0], 70, 'right', 'UTF-8', 1)."\n";		// address line 1
+		$s .= dol_trunc(empty($addresslinearray[1]) ? '' : $addresslinearray[1], 70, 'right', 'UTF-8', 1)."\n";		// address line 2
 		$s .= dol_trunc($this->thirdparty->zip, 16, 'right', 'UTF-8', 1)."\n";
 		$s .= dol_trunc($this->thirdparty->town, 35, 'right', 'UTF-8', 1)."\n";
 		$s .= dol_trunc($this->thirdparty->country_code, 2, 'right', 'UTF-8', 1)."\n";
 		// ID of payment
-		$s .= "NON\n";			// NON or QRR
-		$s .= "\n";				// QR Code reference if previous field is QRR
-		// Free text
-		if ($complementaryinfo) {
-			$s .= $complementaryinfo."\n";
+		// A swiss QR bill accepts SCOR with an ISO 11649 reference on an ordinary IBAN,
+		// QRR with a QR-IBAN, or NON. QRR is not built here because a QR reference and
+		// its QR-IBAN are assigned by the bank, so only SCOR and NON are produced.
+		include_once DOL_DOCUMENT_ROOT.'/core/lib/functions_creditorref.lib.php';
+
+		$paymentref = empty($this->payment_reference) ? '' : (string) $this->payment_reference;
+
+		if ($paymentref !== '' && dolPayRefDetectScheme($paymentref) == 'SCOR') {
+			$s .= "SCOR\n";									// NON, QRR or SCOR
+			$s .= dolPayRefStrip($paymentref)."\n";			// ISO 11649 creditor reference
 		} else {
-			$s .= "\n";
+			$s .= "NON\n";									// NON or QRR
+			$s .= "\n";									// QR Code reference if previous field is QRR
 		}
+		// Unstructured message. The structured billing information below carries the
+		// same details, so this stays empty to avoid printing them twice.
+		$s .= "\n";
 		$s .= "EPD\n";
 		// More text, complementary info
 		if ($complementaryinfo) {
@@ -2452,11 +2662,10 @@ abstract class CommonInvoiceLine extends CommonObjectLine
 	public $remise_percent;
 
 	/**
-	 * Fixed discount
-	 * @var float
-	 * @deprecated
+	 * Id of source discount in table llx_societe_remise_except
+	 * @var ?int
 	 */
-	public $remise;
+	public $fk_remise_except;
 
 	/**
 	 * Total amount before taxes
@@ -2566,4 +2775,22 @@ abstract class CommonInvoiceLine extends CommonObjectLine
 	 * @var float 		Situation advance percentage (default 100 for standard invoices)
 	 */
 	public $situation_percent = 100;
+
+
+	/**
+	 * Check if a line is a deposit line
+	 *
+	 * @return bool                 True if line is a deposit, false otherwise
+	 */
+	public function isDepositLine()
+	{
+		// Do not take into account lines of the type "deposit."
+		$reg = array();
+		if (preg_match('/^\((.*)\)$/', $this->desc, $reg)) {
+			if ($reg[1] == 'DEPOSIT') {
+				return true;
+			}
+		}
+		return false;
+	}
 }

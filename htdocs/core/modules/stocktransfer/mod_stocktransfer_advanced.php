@@ -50,7 +50,12 @@ class mod_stocktransfer_advanced extends ModeleNumRefStockTransfer
 	/**
 	 * @var string name
 	 */
-	public $name = 'got2be';
+	public $name = 'advanced';
+
+	/**
+	 * @var int 	position
+	 */
+	public $position = 60;
 
 
 	/**
@@ -148,7 +153,7 @@ class mod_stocktransfer_advanced extends ModeleNumRefStockTransfer
 			return 0;
 		}
 
-		$date = $object->date;
+		$date = $object->date_creation;
 
 		$numFinal = get_next_value($db, $mask, 'stocktransfer_stocktransfer', 'ref', '', null, $date);
 
